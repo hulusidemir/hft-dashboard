@@ -16,6 +16,7 @@ import type { IUnifiedOrderBook } from './interfaces/IUnifiedOrderBook.js';
 import type { ITradeWithCVD } from './interfaces/IUnifiedTrade.js';
 import type { IUnifiedLiquidation } from './interfaces/IUnifiedLiquidation.js';
 import type { IUnifiedOpenInterest } from './interfaces/IUnifiedOpenInterest.js';
+import { fetchMrData } from './services/MrService.js';
 
 // ── Topic Constants ──────────────────────────────────────────────────────────
 const TOPIC_LOB          = 'lob';
@@ -131,6 +132,36 @@ export function startServer(options: ServerOptions): Promise<ServerHandle> {
         res.end(JSON.stringify({ topVolume: [], topGainers: [], topLosers: [], updatedAt: 0 }));
       }
     });
+  });
+
+  // ── COIN MR (Market Reconnaissance) REST endpoint ─────────────────────────
+  app.get('/api/mr', (res, req) => {
+    const symbol = (req.getQuery('symbol') || getCurrentSymbol()).toUpperCase();
+    const timeframe = (req.getQuery('tf') || '1h') as '15m' | '1h' | '4h' | '24h';
+
+    // uWS: response nesnesinin hâlâ geçerli olup olmadığını izle
+    let aborted = false;
+    res.onAborted(() => { aborted = true; });
+
+    fetchMrData(symbol, timeframe)
+      .then((result) => {
+        if (aborted) return;
+        res.cork(() => {
+          applyCors(res);
+          res.writeHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(result));
+        });
+      })
+      .catch((err) => {
+        if (aborted) return;
+        log.error('MR fetch error', err instanceof Error ? err : new Error(String(err)));
+        res.cork(() => {
+          applyCors(res);
+          res.writeStatus('500 Internal Server Error');
+          res.writeHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        });
+      });
   });
 
   // ── CORS preflight handler ────────────────────────────────────────────────

@@ -108,7 +108,7 @@ export interface MarketState {
   isAlarmEnabled: boolean;
 
   // ── View State ────────────────────────────────────────────────────────
-  activeView: 'dashboard' | 'radar';
+  activeView: 'dashboard' | 'radar' | 'mr';
 
   // ── War Log (Savaş Günlüğü) ────────────────────────────────────────
   warLog: WarLogEntry[];
@@ -175,7 +175,7 @@ export function toggleAlarm(): void {
 }
 
 // ── View Toggle ──────────────────────────────────────────────────────────
-export function setActiveView(view: 'dashboard' | 'radar'): void {
+export function setActiveView(view: 'dashboard' | 'radar' | 'mr'): void {
   marketStore.setState({ activeView: view });
 }
 

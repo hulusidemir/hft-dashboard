@@ -10,6 +10,7 @@ import TapeCanvas from './components/TapeCanvas';
 import LiquidationFeed from './components/LiquidationFeed';
 import SystemMonitor from './components/SystemMonitor';
 import RadarPanel from './components/RadarPanel';
+import CoinMRPanel from './components/CoinMRPanel';
 import TopBar from './components/TopBar';
 
 // ── Status Bar (düşük frekanslı — React re-render güvenli) ──────────────────
@@ -166,7 +167,12 @@ function App() {
           <RadarPanel />
         </div>
       )}
-
+      {/* ── COIN MR View ──────────────────────────────────────────────────── */}
+      {activeView === 'mr' && (
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <CoinMRPanel />
+        </div>
+      )}
       {/* ── Main Grid: 3 sütun (display:none ile gizle — WS kopmaz) ── */}
       <div style={{
         flex: 1,
