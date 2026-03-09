@@ -1,0 +1,23 @@
+/* ── Bloomberg Terminal Dark Theme ─────────────────────────────────────────── */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  font-family: 'Arial', 'Helvetica Neue', sans-serif;
+  font-size: 12px;
+  line-height: 1.3;
+  color: #cccccc;
+  background-color: #000000;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000000;
+}
