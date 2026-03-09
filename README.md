@@ -2,19 +2,19 @@
 
 High-frequency crypto market dashboard monorepo.
 
-Bu depo iki ana parçadan oluşur:
+This repository consists of two main parts:
 
-- `backend/`: Gerçek zamanlı veri toplama, birleştirme ve yayın katmanı
-- `frontend/`: React + Vite tabanlı görselleştirme ve dashboard arayüzü
+- `backend/`: Real-time data ingestion, aggregation, and streaming layer
+- `frontend/`: React + Vite-based visualization and dashboard interface
 
-## Mimari
+## Architecture
 
-- Backend, Binance/Bybit/OKX kaynaklarından market stream verilerini toplar.
-- Aggregator katmanı order book, trade, liquidation ve open interest verilerini unified formata çevirir.
-- uWebSockets.js server üzerinden binary msgpack mesajları frontend'e yayınlanır.
-- Frontend, bu streamleri grafik/panel bileşenleri üzerinde render eder.
+- The backend ingests market stream data from Binance, Bybit, and OKX.
+- The aggregator layer transforms order book, trade, liquidation, and open interest data into a unified format.
+- Data is published to the frontend via binary msgpack messages over uWebSockets.js.
+- The frontend renders these streams in chart and panel components.
 
-## Klasör Yapısı
+## Folder Structure
 
 ```text
 .
@@ -29,7 +29,7 @@ Bu depo iki ana parçadan oluşur:
 └── README.md
 ```
 
-## Hızlı Başlangıç
+## Quick Start
 
 ### 1) Backend
 
@@ -39,11 +39,11 @@ npm install
 npm run dev
 ```
 
-Varsayılan backend portu: `9000`
+Default backend port: `9000`
 
 ### 2) Frontend
 
-Yeni terminalde:
+In a new terminal:
 
 ```bash
 cd frontend
@@ -51,43 +51,28 @@ npm install
 npm run dev
 ```
 
-## Script Özeti
+## Scripts Overview
 
 ### Backend (`backend/package.json`)
 
-- `npm run dev`: TSX watch ile geliştirme
-- `npm run build`: TypeScript derleme
-- `npm start`: derlenmiş çıktıyı çalıştırma
-- `npm run typecheck`: tip kontrolü
+- `npm run dev`: Development mode with TSX watch
+- `npm run build`: TypeScript build
+- `npm start`: Run compiled output
+- `npm run typecheck`: Type checking
 
 ### Frontend (`frontend/package.json`)
 
-- `npm run dev`: Vite geliştirme sunucusu
+- `npm run dev`: Vite development server
 - `npm run build`: TS + Vite production build
-- `npm run preview`: build önizleme
-- `npm run lint`: ESLint kontrolü
+- `npm run preview`: Preview production build
+- `npm run lint`: ESLint check
 
-## Ortam Değişkenleri
+## Environment Variables
 
-- Backend: `WS_PORT` (opsiyonel)
+- Backend: `WS_PORT` (optional)
 
-Örnek:
+Example:
 
 ```bash
 WS_PORT=9100 npm run dev
 ```
-
-## Git ve Yayınlama
-
-Bu repo monorepo olarak tek kökten yönetilmelidir:
-
-```bash
-git init
-git add .
-git commit -m "Initial monorepo commit"
-git branch -M main
-git remote add origin https://github.com/hulusidemir/hft-dashboard.git
-git push -u origin main
-```
-
-Eğer daha önce sadece `backend/` içinde Git başlattıysan, kökten tek repo yönetimi için `backend/.git` klasörünü kaldırıp yukarıdaki adımları kökte çalıştır.
