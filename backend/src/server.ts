@@ -19,6 +19,9 @@ import type { IUnifiedOpenInterest } from './interfaces/IUnifiedOpenInterest.js'
 import { fetchMrData } from './services/MrService.js';
 import { getRecentLiquidations } from './db/LiquidationDB.js';
 import { fetchCoinInfo } from './services/CoinInfoService.js';
+import { fetchKlines, fetchOIHistory } from './services/KlineService.js';
+import { fetchCoinNews } from './services/NewsService.js';
+import { fetchMarketOverview } from './services/OverviewService.js';
 
 // ── Topic Constants ──────────────────────────────────────────────────────────
 const TOPIC_LOB          = 'lob';
@@ -202,6 +205,125 @@ export function startServer(options: ServerOptions): Promise<ServerHandle> {
       .catch((err) => {
         if (aborted) return;
         log.error('CoinInfo fetch error', err instanceof Error ? err : new Error(String(err)));
+        res.cork(() => {
+          applyCors(res);
+          res.writeStatus('500 Internal Server Error');
+          res.writeHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        });
+      });
+  });
+
+  // ── Klines REST endpoint ──────────────────────────────────────────────────
+  app.get('/api/klines', (res, req) => {
+    const symbol = (req.getQuery('symbol') || getCurrentSymbol()).toUpperCase();
+    const interval = req.getQuery('interval') || '5m';
+    const limitStr = req.getQuery('limit');
+    const limit = limitStr ? Math.min(Number(limitStr), 1500) : 500;
+
+    let aborted = false;
+    res.onAborted(() => { aborted = true; });
+
+    fetchKlines(symbol, interval, limit)
+      .then((result) => {
+        if (aborted) return;
+        res.cork(() => {
+          applyCors(res);
+          res.writeHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(result));
+        });
+      })
+      .catch((err) => {
+        if (aborted) return;
+        log.error('Klines fetch error', err instanceof Error ? err : new Error(String(err)));
+        res.cork(() => {
+          applyCors(res);
+          res.writeStatus('500 Internal Server Error');
+          res.writeHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        });
+      });
+  });
+
+  // ── Coin News REST endpoint ─────────────────────────────────────────────────
+  // ── OI History REST endpoint ────────────────────────────────────────────────
+  app.get('/api/oi-history', (res, req) => {
+    const symbol = (req.getQuery('symbol') || getCurrentSymbol()).toUpperCase();
+    const period = req.getQuery('period') || '5m';
+    const limitStr = req.getQuery('limit');
+    const limit = limitStr ? Math.min(Number(limitStr), 500) : 500;
+
+    let aborted = false;
+    res.onAborted(() => { aborted = true; });
+
+    fetchOIHistory(symbol, period, limit)
+      .then((result) => {
+        if (aborted) return;
+        res.cork(() => {
+          applyCors(res);
+          res.writeHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(result));
+        });
+      })
+      .catch((err) => {
+        if (aborted) return;
+        log.error('OI History fetch error', err instanceof Error ? err : new Error(String(err)));
+        res.cork(() => {
+          applyCors(res);
+          res.writeStatus('500 Internal Server Error');
+          res.writeHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        });
+      });
+  });
+
+  // ── Coin News REST endpoint ─────────────────────────────────────────────────
+  app.get('/api/news', (res, req) => {
+    const symbol = (req.getQuery('symbol') || getCurrentSymbol()).toUpperCase();
+
+    let aborted = false;
+    res.onAborted(() => { aborted = true; });
+
+    fetchCoinNews(symbol)
+      .then((result) => {
+        if (aborted) return;
+        res.cork(() => {
+          applyCors(res);
+          res.writeHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(result));
+        });
+      })
+      .catch((err) => {
+        if (aborted) return;
+        log.error('News fetch error', err instanceof Error ? err : new Error(String(err)));
+        res.cork(() => {
+          applyCors(res);
+          res.writeStatus('500 Internal Server Error');
+          res.writeHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        });
+      });
+  });
+
+  // ── Market Overview REST endpoint ──────────────────────────────────────────
+  app.get('/api/overview', (res, req) => {
+    const symbol = (req.getQuery('symbol') || 'BTCUSDT').toUpperCase();
+
+    let aborted = false;
+    res.onAborted(() => { aborted = true; });
+
+    fetchMarketOverview(symbol)
+      .then((result) => {
+        if (aborted) return;
+        res.cork(() => {
+          applyCors(res);
+          res.writeHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(result));
+        });
+      })
+      .catch((err) => {
+        if (aborted) return;
+        log.error('Overview fetch error', err instanceof Error ? err : new Error(String(err)));
         res.cork(() => {
           applyCors(res);
           res.writeStatus('500 Internal Server Error');

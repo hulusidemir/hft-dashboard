@@ -171,8 +171,8 @@ function parseBinanceLiq(msg: BinForceOrder): void {
   // ALL liq events — frontend liquidation feed için (sembol filtresi index.ts'de yapılır)
   liqEvents.emit('liq_all', rec);
 
-  // Global war_liq event — RadarPanel War Log için
-  if (rec.usdValue >= 50_000) {
+  // Global war_liq event — RadarPanel War Log için ($10K+)
+  if (rec.usdValue >= 10_000) {
     liqEvents.emit('war_liq', {
       type: side === 'long' ? 'LIQ_LONG' : 'LIQ_SHORT',
       symbol: rec.symbol,
@@ -376,8 +376,8 @@ function parseOkxLiq(msg: OkxLiqMsg): void {
       // ALL liq events — frontend liquidation feed için
       liqEvents.emit('liq_all', rec);
 
-      // Global war_liq event — RadarPanel War Log için
-      if (rec.usdValue >= 50_000) {
+      // Global war_liq event — RadarPanel War Log için ($10K+)
+      if (rec.usdValue >= 10_000) {
         liqEvents.emit('war_liq', {
           type: side === 'long' ? 'LIQ_LONG' : 'LIQ_SHORT',
           symbol: rec.symbol,

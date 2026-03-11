@@ -34,6 +34,16 @@ export interface CoinInfoResult {
   // Exchange listings
   spotExchanges: string[];   // e.g. ['Binance','Coinbase','OKX','Bybit']
   perpExchanges: string[];   // e.g. ['Binance','OKX','Bybit']
+  // Price milestones
+  currentPrice: number;
+  athPrice: number | null;
+  athDate: string | null;              // ISO date, e.g. '2021-11-10T00:00:00.000Z'
+  athChangePercentage: number | null;  // e.g. -52.3  (current is 52.3% below ATH)
+  atlPrice: number | null;
+  atlDate: string | null;
+  atlChangePercentage: number | null;  // e.g. 12345.6 (current is 12345.6% above ATL)
+  launchPrice: number | null;          // price on genesis_date (from /history)
+  launchChangePercentage: number | null; // % change from launch to current
 }
 
 interface CacheEntry {
@@ -237,16 +247,51 @@ export async function fetchCoinInfo(symbol: string): Promise<CoinInfoResult> {
     descTr = await translateToTurkish(descEn);
   }
 
+  // ── Price milestones from market_data ─────────────────────────────────
+  const md = data.market_data ?? {};
+  const currentPrice: number = md.current_price?.usd ?? 0;
+  const athPrice: number | null = md.ath?.usd ?? null;
+  const athDate: string | null = md.ath_date?.usd ?? null;
+  const athChangePct: number | null = md.ath_change_percentage?.usd ?? null;
+  const atlPrice: number | null = md.atl?.usd ?? null;
+  const atlDate: string | null = md.atl_date?.usd ?? null;
+  const atlChangePct: number | null = md.atl_change_percentage?.usd ?? null;
+
+  // Fetch launch price from CoinGecko /history endpoint if genesis_date exists
+  let launchPrice: number | null = null;
+  let launchChangePct: number | null = null;
+  const genesisDateStr: string | null = data.genesis_date ?? null;
+  if (genesisDateStr && geckoId) {
+    try {
+      // CoinGecko history expects dd-mm-yyyy format
+      const [y, m, d] = genesisDateStr.split('-');
+      const historyDate = `${d}-${m}-${y}`;
+      const histRes = await axios.get(
+        `${COINGECKO_BASE}/coins/${geckoId}/history`,
+        { params: { date: historyDate, localization: false }, timeout: 10000 },
+      );
+      const histPrice = histRes.data?.market_data?.current_price?.usd;
+      if (typeof histPrice === 'number' && histPrice > 0) {
+        launchPrice = histPrice;
+        if (currentPrice > 0) {
+          launchChangePct = ((currentPrice - histPrice) / histPrice) * 100;
+        }
+      }
+    } catch (err) {
+      log.warn(`Failed to fetch historical price for ${geckoId} on genesis date ${genesisDateStr}`);
+    }
+  }
+
   const result: CoinInfoResult = {
     symbol: key,
     name: data.name ?? '',
     image: data.image?.large ?? data.image?.small ?? '',
-    marketCap: data.market_data?.market_cap?.usd ?? 0,
+    marketCap: md.market_cap?.usd ?? 0,
     marketCapRank: data.market_cap_rank ?? null,
     categories: (data.categories ?? []).filter((c: unknown) => c != null && c !== ''),
     descriptionTr: descTr,
     descriptionEn: descEn,
-    genesisDate: data.genesis_date ?? null,
+    genesisDate: genesisDateStr,
     homepage: data.links?.homepage?.[0] ?? '',
     // Social links
     twitter: data.links?.twitter_screen_name ? `https://x.com/${data.links.twitter_screen_name}` : '',
@@ -284,6 +329,16 @@ export async function fetchCoinInfo(symbol: string): Promise<CoinInfoResult> {
     })(),
     // Perp exchanges will be filled below via direct REST API checks
     perpExchanges: [],
+    // Price milestones
+    currentPrice,
+    athPrice,
+    athDate,
+    athChangePercentage: athChangePct,
+    atlPrice,
+    atlDate,
+    atlChangePercentage: atlChangePct,
+    launchPrice,
+    launchChangePercentage: launchChangePct,
   };
 
   // ── Perp detection: CoinGecko free API does not return derivatives tickers,
