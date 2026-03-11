@@ -11,7 +11,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useMarketStore, setActiveView } from '../stores/marketStore';
 
-const REST_BASE = 'http://localhost:9000';
+const REST_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:9000';
 
 // ── Tipler ─────────────────────────────────────────────────────────────────
 

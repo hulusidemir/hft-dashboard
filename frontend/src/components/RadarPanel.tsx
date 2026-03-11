@@ -30,7 +30,7 @@ interface HotTargets {
 }
 
 // ── Config ───────────────────────────────────────────────────────────────────
-const REST_BASE     = 'http://localhost:9000';
+const REST_BASE     = import.meta.env.VITE_BACKEND_URL || 'http://localhost:9000';
 const POLL_INTERVAL = 10_000;
 
 // ── Formatters ───────────────────────────────────────────────────────────────

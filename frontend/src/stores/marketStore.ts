@@ -120,8 +120,9 @@ export interface MarketState {
 }
 
 // ── Config ──────────────────────────────────────────────────────────────────
-const WS_URL           = 'ws://localhost:9000';
-const REST_BASE        = 'http://localhost:9000';
+const _backendUrl      = import.meta.env.VITE_BACKEND_URL || 'http://localhost:9000';
+const WS_URL           = _backendUrl.replace(/^http/, 'ws');
+const REST_BASE        = _backendUrl;
 const MAX_TRADES       = 200;
 const MAX_LIQUIDATIONS = 50;
 const RECONNECT_BASE   = 500;
