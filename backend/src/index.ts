@@ -19,6 +19,12 @@ import { LiquidationAggregator } from './aggregators/LiquidationAggregator.js';
 import { OpenInterestAggregator } from './aggregators/OpenInterestAggregator.js';
 import { startServer } from './server.js';
 import { RadarService } from './services/RadarService.js';
+import { initLiquidationDB, closeLiquidationDB } from './db/LiquidationDB.js';
+import { startLiquidationListener, stopLiquidationListener, liqEvents } from './services/LiquidationListener.js';
+import { startGlobalTradeListener, stopGlobalTradeListener, globalTradeEvents } from './services/GlobalTradeListener.js';
+import type { LiquidationRecord } from './db/LiquidationDB.js';
+import { Exchange } from './interfaces/IExchangeService.js';
+import type { IUnifiedLiquidation } from './interfaces/IUnifiedLiquidation.js';
 
 // ── Config ───────────────────────────────────────────────────────────────────
 const WS_PORT = Number(process.env['WS_PORT']) || 9000;
@@ -50,6 +56,10 @@ async function main(): Promise<void> {
   // ── 0b. Varsayılan sembolü kaydet (tickSize/stepSize fetch) ───────────────
   await fetchAndRegisterSymbol(DEFAULT_SYMBOL);
 
+  // ── 0c. SQLite Tasfiye Veritabanı + Otonom Dinleyici ───────────────────
+  initLiquidationDB();
+  startLiquidationListener();
+
   // ── 1. Exchange Services ──────────────────────────────────────────────────
   const binance = new BinanceService();
   const bybit   = new BybitService();
@@ -74,6 +84,7 @@ async function main(): Promise<void> {
   async function switchSymbol(newSymbol: string): Promise<void> {
     log.info(`━━━ Sembol değişikliği: ${currentSymbol} → ${newSymbol} ━━━`);
     const t0 = Date.now();
+    const previousSymbol = currentSymbol;
 
     // 1) Aggregator'ları durdur ve sıfırla
     log.info('[1/5] Aggregator\'lar durduruluyor ve sıfırlanıyor...');
@@ -88,39 +99,65 @@ async function main(): Promise<void> {
     bybit.disconnect();
     okx.disconnect();
 
-    // 3) Yeni sembolün config'ini fetch et (tickSize/stepSize/contractSize)
-    log.info(`[3/5] Sembol config çekiliyor: ${newSymbol}`);
-    await fetchAndRegisterSymbol(newSymbol);
+    try {
+      // 3) Yeni sembolün config'ini fetch et (tickSize/stepSize/contractSize)
+      log.info(`[3/5] Sembol config çekiliyor: ${newSymbol}`);
+      await fetchAndRegisterSymbol(newSymbol);
 
-    // 4) 3 Borsaya yeni sembolle bağlan
-    log.info(`[4/5] Borsalara yeniden bağlanılıyor: ${newSymbol}`);
-    const connectResults = await Promise.allSettled([
-      binance.connect(newSymbol),
-      bybit.connect(newSymbol),
-      okx.connect(newSymbol),
-    ]);
+      // 4) 3 Borsaya yeni sembolle bağlan
+      log.info(`[4/5] Borsalara yeniden bağlanılıyor: ${newSymbol}`);
+      const connectResults = await Promise.allSettled([
+        binance.connect(newSymbol),
+        bybit.connect(newSymbol),
+        okx.connect(newSymbol),
+      ]);
 
-    // Hangi borsalar bağlandı, hangileri başarısız?
-    const labels = ['Binance', 'Bybit', 'OKX'] as const;
-    for (let i = 0; i < connectResults.length; i++) {
-      const r = connectResults[i]!;
-      if (r.status === 'rejected') {
-        log.warn(`${labels[i]} bağlantı başarısız (${newSymbol}) — devam ediliyor`, {
-          error: r.reason instanceof Error ? r.reason.message : String(r.reason),
-        });
+      // Hangi borsalar bağlandı, hangileri başarısız?
+      const labels = ['Binance', 'Bybit', 'OKX'] as const;
+      for (let i = 0; i < connectResults.length; i++) {
+        const r = connectResults[i]!;
+        if (r.status === 'rejected') {
+          log.warn(`${labels[i]} bağlantı başarısız (${newSymbol}) — devam ediliyor`, {
+            error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+          });
+        }
       }
+
+      // 5) Aggregator'ları yeni sembolle başlat
+      log.info(`[5/5] Aggregator'lar başlatılıyor: ${newSymbol}`);
+      obAgg.start(newSymbol);
+      trAgg.start(newSymbol);
+      liqAgg.start(newSymbol);
+      oiAgg.start(newSymbol);
+
+      currentSymbol = newSymbol;
+      const elapsed = Date.now() - t0;
+      log.info(`━━━ Sembol değişikliği tamamlandı: ${newSymbol} (${elapsed}ms) ━━━`);
+    } catch (err) {
+      // ── Hata Kurtarma — eski sembole geri dön ────────────────────────
+      log.error(`Sembol değişikliği başarısız (${newSymbol}), ${previousSymbol}'e geri dönülüyor...`,
+        err instanceof Error ? err : new Error(String(err)));
+
+      try {
+        await fetchAndRegisterSymbol(previousSymbol);
+        await Promise.allSettled([
+          binance.connect(previousSymbol),
+          bybit.connect(previousSymbol),
+          okx.connect(previousSymbol),
+        ]);
+        obAgg.start(previousSymbol);
+        trAgg.start(previousSymbol);
+        liqAgg.start(previousSymbol);
+        oiAgg.start(previousSymbol);
+        log.info(`Eski sembole geri dönüldü: ${previousSymbol}`);
+      } catch (recoveryErr) {
+        log.fatal('Kurtarma da başarısız — sistem veri akışı olmadan devam ediyor',
+          recoveryErr instanceof Error ? recoveryErr : new Error(String(recoveryErr)));
+      }
+
+      // Orijinal hatayı yeniden fırlat — server.ts catch'e düşsün
+      throw err;
     }
-
-    // 5) Aggregator'ları yeni sembolle başlat
-    log.info(`[5/5] Aggregator'lar başlatılıyor: ${newSymbol}`);
-    obAgg.start(newSymbol);
-    trAgg.start(newSymbol);
-    liqAgg.start(newSymbol);
-    oiAgg.start(newSymbol);
-
-    currentSymbol = newSymbol;
-    const elapsed = Date.now() - t0;
-    log.info(`━━━ Sembol değişikliği tamamlandı: ${newSymbol} (${elapsed}ms) ━━━`);
   }
 
   // ── 3. uWebSockets.js Server ─────────────────────────────────────────────
@@ -149,6 +186,35 @@ async function main(): Promise<void> {
 
   log.info('Borsa bağlantı denemeleri tamamlandı');
 
+  // ── 4b. Global War Log Event Wiring ───────────────────────────────────────────────
+  // LiquidationListener (global tasfiye) + GlobalTradeListener (global whale) → war_log
+  liqEvents.on('war_liq', (entry) => serverHandle.publishWarLog(entry));
+  globalTradeEvents.on('war_whale', (entry) => serverHandle.publishWarLog(entry));
+
+  // ── 4b2. LiquidationListener → Liquidation Feed ──────────────────────────────────
+  // Global stream'lerden (Binance !forceOrder@arr + OKX liquidation-orders) gelen
+  // tüm tasfiyeler burada yakalanır. Aktif sembolle eşleşenler frontend'e iletilir.
+  const EXCHANGE_MAP: Record<string, Exchange> = { binance: Exchange.BINANCE, bybit: Exchange.BYBIT, okx: Exchange.OKX };
+  liqEvents.on('liq_all', (rec: LiquidationRecord) => {
+    if (rec.symbol !== currentSymbol) return;
+
+    const exEnum = EXCHANGE_MAP[rec.exchange] ?? Exchange.BINANCE;
+    const unified: IUnifiedLiquidation = {
+      id: `${rec.exchange}_liq_${rec.timestamp}_${rec.price}`,
+      symbol: rec.symbol,
+      exchange: exEnum,
+      side: rec.side === 'long' ? 'LONG' : 'SHORT',
+      price: rec.price,
+      quantity: rec.qty,
+      quoteQty: rec.usdValue,
+      timestamp: rec.timestamp,
+    };
+    serverHandle.publishLiquidation(unified);
+  });
+
+  // ── 4c. Global Trade Listener — Top 50 coin whale trade dedektörü ──────────
+  startGlobalTradeListener(bybitSymbolList);
+
   // ── 5. Start Aggregators ──────────────────────────────────────────────────
   obAgg.start(DEFAULT_SYMBOL);
   trAgg.start(DEFAULT_SYMBOL);
@@ -172,7 +238,9 @@ async function main(): Promise<void> {
     liqAgg.reset();
     oiAgg.reset();
     radar.stop();
-    log.info('Aggregator\'lar ve Radar durduruldu ve sıfırlandı');
+    stopLiquidationListener();
+    stopGlobalTradeListener();
+    log.info('Aggregator\'lar, Radar, Liq Listener ve Global Trade Listener durduruldu');
 
     // 6b. uWS sunucusunu kapat
     serverHandle.close();
@@ -182,6 +250,9 @@ async function main(): Promise<void> {
     bybit.disconnect();
     okx.disconnect();
     log.info('Borsa bağlantıları kesildi');
+
+    closeLiquidationDB();
+    log.info('LiquidationDB kapatıldı');
 
     log.info('Graceful shutdown tamamlandı. Çıkılıyor...');
     process.exit(0);

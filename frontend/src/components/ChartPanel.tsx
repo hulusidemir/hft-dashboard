@@ -191,26 +191,30 @@ export default function ChartPanel({ onChartReady }: ChartPanelProps) {
       };
       currentCandle.current = newCandle;
 
-      series.update({
-        time:  candleTime as UTCTimestamp,
-        open:  price,
-        high:  price,
-        low:   price,
-        close: price,
-      });
+      try {
+        series.update({
+          time:  candleTime as UTCTimestamp,
+          open:  price,
+          high:  price,
+          low:   price,
+          close: price,
+        });
+      } catch { /* stale ts */ }
     } else if (candleTime === candle.time) {
       // Mevcut mumu güncelle
       candle.close = price;
       if (price > candle.high) candle.high = price;
       if (price < candle.low)  candle.low  = price;
 
-      series.update({
-        time:  candle.time as UTCTimestamp,
-        open:  candle.open,
-        high:  candle.high,
-        low:   candle.low,
-        close: candle.close,
-      });
+      try {
+        series.update({
+          time:  candle.time as UTCTimestamp,
+          open:  candle.open,
+          high:  candle.high,
+          low:   candle.low,
+          close: candle.close,
+        });
+      } catch { /* stale ts */ }
     }
     // else: geçmişe ait trade → yoksay
 

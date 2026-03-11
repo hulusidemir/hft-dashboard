@@ -35,3 +35,8 @@ Thumbs.db
 .idea/
 .vscode/
 !.vscode/extensions.json
+
+# SQLite DB files
+backend/liquidations.db
+backend/liquidations.db-shm
+backend/liquidations.db-wal

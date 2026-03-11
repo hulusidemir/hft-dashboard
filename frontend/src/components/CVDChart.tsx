@@ -126,11 +126,11 @@ export default function CVDChart({ onChartReady }: CVDChartProps) {
         // Yeni zaman noktası
         const point: CVDPoint = { time: timeSec, value: cvdValue };
         lastPointRef.current = point;
-        series.update({ time: timeSec as UTCTimestamp, value: cvdValue });
+        try { series.update({ time: timeSec as UTCTimestamp, value: cvdValue }); } catch { /* stale ts */ }
       } else if (timeSec === lastPt.time) {
         // Aynı saniye — güncelle
         lastPt.value = cvdValue;
-        series.update({ time: timeSec as UTCTimestamp, value: cvdValue });
+        try { series.update({ time: timeSec as UTCTimestamp, value: cvdValue }); } catch { /* stale ts */ }
       }
     });
 

@@ -152,6 +152,33 @@ function SectionHeader({ text, icon }: { text: string; icon: string }) {
   );
 }
 
+// ── Exchange badge renkleri ──────────────────────────────────────────────────
+const EXCHANGE_STYLE: Record<string, { bg: string; fg: string; label: string }> = {
+  binance: { bg: '#f0b90b22', fg: '#f0b90b', label: 'BIN' },
+  bybit:   { bg: '#ff660022', fg: '#ff6600', label: 'BYB' },
+  okx:     { bg: '#00e5ff22', fg: '#00e5ff', label: 'OKX' },
+};
+
+function ExchangeBadge({ exchange }: { exchange: string }) {
+  const key = exchange.toLowerCase();
+  const style = EXCHANGE_STYLE[key] ?? { bg: '#ffffff11', fg: '#888', label: exchange.slice(0, 3).toUpperCase() };
+  return (
+    <span style={{
+      display: 'inline-block',
+      padding: '1px 5px',
+      borderRadius: 3,
+      background: style.bg,
+      color: style.fg,
+      fontSize: 8,
+      fontWeight: 800,
+      letterSpacing: 0.6,
+      border: `1px solid ${style.fg}44`,
+    }}>
+      {style.label}
+    </span>
+  );
+}
+
 // ── WarLogRow ────────────────────────────────────────────────────────────────
 function WarLogRow({ entry }: { entry: WarLogEntry }) {
   const isWhale = entry.type === 'WHALE_BUY' || entry.type === 'WHALE_SELL';
@@ -184,7 +211,7 @@ function WarLogRow({ entry }: { entry: WarLogEntry }) {
       </td>
       <td style={TD_STYLE}>{fmtPrice(entry.price)}</td>
       <td style={{ ...TD_STYLE, color: '#ddd', fontWeight: 700 }}>{fmtQty(entry.quoteQty)}</td>
-      <td style={{ ...TD_STYLE, color: '#444', fontSize: 9 }}>{entry.exchange}</td>
+      <td style={{ ...TD_STYLE, textAlign: 'center' }}><ExchangeBadge exchange={entry.exchange} /></td>
     </tr>
   );
 }

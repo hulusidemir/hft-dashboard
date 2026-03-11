@@ -173,9 +173,8 @@ export class OkxService extends BaseExchangeService {
       args: [
         { channel: 'books-l2-tbt', instId },
         { channel: 'trades', instId },
-        // HOTFIX: instFamily yerine instId kullan — global tasfiye dinlenmeyecek,
-        // yalnızca izlenen enstrümanın tasfiye verileri gelecek
-        { channel: 'liquidation-orders', instType: 'SWAP', instId },
+        // Liquidation: LiquidationListener global liquidation-orders (instType:SWAP) kullanıyor.
+        // Per-symbol stream OKX’te çalışmıyor (instId filtresi ignored) — burada kullanmıyoruz.
       ],
     }];
   }
@@ -500,15 +499,24 @@ export class OkxService extends BaseExchangeService {
     const liqData = msg.data[0] as OkxLiquidationData;
     if (!liqData.details || liqData.details.length === 0) return null;
 
+    // OKX liquidation-orders kanalı instType:SWAP ile abone olunduğunda
+    // TÜM SWAP enstrümanlarının tasfiyelerini gönderir (instId filtresi çalışmaz!).
+    // Sadece izlenen sembolün tasfiyelerini geçir, geri kalanını at.
+    const expectedInstId = getExchangeSymbol(this.currentSymbol, Exchange.OKX);
+    if (liqData.instId !== expectedInstId) return null;
+
     // OKX, tek bir mesajda birden fazla detail gönderebilir
     // Şimdilik en son detail'i al — aggregator zaten hepsini birleştirecek
     const detail = liqData.details[liqData.details.length - 1];
     if (!detail) return null;
 
     const contractSize = this.symbolConfig?.okxContractSize ?? 1;
-    const price = parseFloat(detail.px || detail.bkPx);
+    // OKX liquidation-orders kanalında px YOKTUR — bkPx (bankruptcy/tasfiye fiyatı) kullanılır
+    const price = parseFloat(detail.bkPx);
     const contracts = parseFloat(detail.sz);
-    const quantity = contracts * contractSize;
+    const quantity = contracts * contractSize;  // base cinsinden miktar
+
+    if (!price || price <= 0 || !quantity || quantity <= 0) return null;
 
     return {
       exchange: Exchange.OKX,

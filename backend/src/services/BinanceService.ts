@@ -134,6 +134,12 @@ export class BinanceService extends BaseExchangeService {
   /** Snapshot isteği devam ediyor mu? (mükerrer istek engelleme) */
   private isFetchingSnapshot: boolean = false;
 
+  /**
+   * Buffer'da ilk geçerli delta bulunamadıysa true.
+   * WS'ten gelen ilk delta'nın Step 5 (straddle) kontrolünden geçmesi gerekir.
+   */
+  private needsFirstValidDelta: boolean = false;
+
   /** OI polling zamanlayıcısı */
   private oiPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -158,7 +164,8 @@ export class BinanceService extends BaseExchangeService {
     const streams = [
       `${bSymbol}@depth@100ms`,
       `${bSymbol}@aggTrade`,
-      `${bSymbol}@forceOrder`,
+      // Liquidation: LiquidationListener global !forceOrder@arr kullanıyor.
+      // Per-symbol @forceOrder stream’i güvenilmez/gecikmeli — burada kullanmıyoruz.
     ];
     return `${BINANCE_WS_BASE}${streams.join('/')}`;
   }
@@ -253,6 +260,48 @@ export class BinanceService extends BaseExchangeService {
         this.log.warn('Delta buffer taştı (5000+), snapshot bekleniyor...');
         this.deltaBuffer = this.deltaBuffer.slice(-2000);
       }
+      return;
+    }
+
+    // Adım 5 (gecikmeli): Buffer'da ilk geçerli delta bulunamadıysa
+    // WS'ten gelen deltayı Step 5 kriteriyle kontrol et
+    if (this.needsFirstValidDelta) {
+      const snapshotId = this.snapshotLastUpdateId;
+
+      // Hâlâ eski delta — atla
+      if (delta.u < snapshotId) {
+        return;
+      }
+
+      // Straddle kontrolü: U <= snapshotId+1 VE u >= snapshotId+1
+      if (delta.U <= snapshotId + 1 && delta.u >= snapshotId + 1) {
+        this.needsFirstValidDelta = false;
+        this.log.debug('WS\'ten ilk geçerli delta bulundu (buffer miss sonrası)', {
+          delta_U: delta.U,
+          delta_u: delta.u,
+          snapshotId,
+        });
+        this.processDepthDelta(delta);
+        return;
+      }
+
+      // Gap: delta snapshot'tan çok ileri — yeniden senkronize et
+      if (delta.U > snapshotId + 1) {
+        this.log.warn('WS delta boşluğu algılandı — yeniden senkronizasyon', {
+          delta_U: delta.U,
+          snapshotLastUpdateId: snapshotId,
+        });
+        this.resetBookState();
+        this.disconnect();
+        setTimeout(() => {
+          this.connect(this.currentSymbol).catch(err => {
+            this.log.error('Yeniden bağlanma hatası', err instanceof Error ? err : new Error(String(err)));
+          });
+        }, 100);
+        return;
+      }
+
+      // delta.u >= snapshotId ama U > snapshotId+1 → uyumsuz, atla
       return;
     }
 
@@ -397,7 +446,8 @@ export class BinanceService extends BaseExchangeService {
       // Buffer'da hiç geçerli delta bulunamadı — sorun değil, yeni deltalar WS'ten gelecek.
       // lastProcessedUpdateId'yi snapshot'ın ID'sine set et
       this.lastProcessedUpdateId = snapshotId;
-      this.log.debug('Buffer\'da geçerli delta bulunamadı, snapshot ID ile devam ediliyor', {
+      this.needsFirstValidDelta = true;
+      this.log.debug('Buffer\'da geçerli delta bulunamadı, WS\'ten ilk geçerli delta bekleniyor', {
         lastProcessedUpdateId: this.lastProcessedUpdateId,
       });
     }
@@ -427,6 +477,7 @@ export class BinanceService extends BaseExchangeService {
     this.isBookSynced = false;
     this.lastProcessedUpdateId = -1;
     this.isFetchingSnapshot = false;
+    this.needsFirstValidDelta = false;
     this.clearOrderBook();
   }
 
@@ -551,8 +602,21 @@ export class BinanceService extends BaseExchangeService {
     const order = data.o;
     if (!order) return null;
 
-    const price = parseFloat(order.ap) || parseFloat(order.p);
-    const quantity = parseFloat(order.q);
+    // Global !forceOrder@arr stream'den geliyoruz — sembol filtrele
+    const expectedSymbol = getExchangeRestSymbol(this.currentSymbol, Exchange.BINANCE);
+    if (order.s !== expectedSymbol) return null;
+
+    // ap = average fill price (gerçek dolum fiyatı)
+    // p  = order price (iflas/tasfiye emri fiyatı — piyasa fiyatına yakın ama tam değil)
+    // FILLED → ap kullan; NEW → p fallback (yaklaşık ama sıfırdan iyi)
+    const avgPrice = parseFloat(order.ap);
+    const orderPrice = parseFloat(order.p);
+    const price = (avgPrice && avgPrice > 0) ? avgPrice : orderPrice;
+    if (!price || price <= 0) return null;
+
+    // z = dolan miktar (gerçek), q = orijinal emir miktarı
+    const quantity = parseFloat(order.z) || parseFloat(order.q);
+    if (quantity <= 0) return null;
 
     return {
       exchange: Exchange.BINANCE,

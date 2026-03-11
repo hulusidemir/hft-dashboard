@@ -3,11 +3,10 @@
 // Frontend ↔ Backend WS round-trip ping ölçümü + bağlantı durumu
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMarketStore, marketStore } from '../stores/marketStore';
 
 // ── Config ──────────────────────────────────────────────────────────────────
-const PING_INTERVAL = 3000;    // 3s aralıkla ping gönder
 const STALE_THRESHOLD = 5000;  // 5s veri gelmezse "stale" sayılır
 
 // ── Gecikme renk mantığı ────────────────────────────────────────────────────
@@ -48,66 +47,47 @@ interface FeedStatus {
 
 function useFeedHealth(): { ws: FeedStatus; feeds: FeedStatus[] } {
   const connected = useMarketStore((s) => s.connected);
+  const isChangingSymbol = useMarketStore((s) => s.isChangingSymbol);
   const [wsLatency, setWsLatency] = useState<number | null>(null);
   const [dataAge, setDataAge]     = useState(0);
-  const pingRef = useRef<number>(0);
 
-  // Periodically compute data staleness
+  // Periodically compute data staleness + WS effective latency
   useEffect(() => {
-    const iv = setInterval(() => {
+    // İlk ölçümü hemen yap — 3 saniye beklemeden
+    function measure() {
       const last = marketStore.getState().lastMessageAt;
-      setDataAge(last > 0 ? Date.now() - last : Infinity);
-    }, 1000);
-    return () => clearInterval(iv);
-  }, []);
-
-  // WS ping/pong measurement (text "ping" → "pong")
-  useEffect(() => {
-    // Not available directly — we measure indirectly via message timestamps
-    // The marketStore records lastMessageAt on every message
-    // We compute the "effective" latency as how fresh data is
-    const iv = setInterval(() => {
-      const now = Date.now();
-      const last = marketStore.getState().lastMessageAt;
+      const age = last > 0 ? Date.now() - last : Infinity;
+      setDataAge(age);
       if (last > 0 && connected) {
-        const age = now - last;
-        // If data arrived within last 500ms, the link is very fast
-        // This is an approximation; actual ping would need backend support
-        setWsLatency(age < 500 ? age : age);
-        pingRef.current = now;
-      } else {
+        setWsLatency(age);
+      } else if (!connected) {
         setWsLatency(null);
       }
-    }, PING_INTERVAL);
+    }
+    measure(); // hemen ölç
+    const iv = setInterval(measure, 1000);
     return () => clearInterval(iv);
   }, [connected]);
 
-  const isStale = dataAge > STALE_THRESHOLD;
+  // Sembol değişimi sırasında stale/offline gösterme — bağlantı hâlâ canlı
+  const isStale = isChangingSymbol ? false : dataAge > STALE_THRESHOLD;
 
-  // Per-exchange feed status — derived from data flow timestamps
+  // Sembol değişimi sırasında → latency 0 göster (yeşil), veri akışı yokken kırmızı olmasın
+  const effectiveLatency = isChangingSymbol ? 0 : wsLatency;
+
   const orderbook = marketStore.getState().orderbook;
+  const hasData = connected && (orderbook != null || isChangingSymbol);
+
   const feeds: FeedStatus[] = [
-    {
-      label: 'BIN',
-      latency: connected && orderbook ? wsLatency : null,
-      stale: isStale,
-    },
-    {
-      label: 'BYB',
-      latency: connected && orderbook ? wsLatency : null,
-      stale: isStale,
-    },
-    {
-      label: 'OKX',
-      latency: connected && orderbook ? wsLatency : null,
-      stale: isStale,
-    },
+    { label: 'BIN', latency: hasData ? effectiveLatency : null, stale: isStale },
+    { label: 'BYB', latency: hasData ? effectiveLatency : null, stale: isStale },
+    { label: 'OKX', latency: hasData ? effectiveLatency : null, stale: isStale },
   ];
 
   return {
     ws: {
       label: 'WS',
-      latency: connected ? wsLatency : null,
+      latency: connected ? (isChangingSymbol ? 0 : wsLatency) : null,
       stale: !connected || isStale,
     },
     feeds,

@@ -17,12 +17,16 @@ const REST_BASE = 'http://localhost:9000';
 
 interface ExchangeMrData {
   openInterest: number;
+  oiDelta: number;
   fundingRate: number;
+  nextFundingTime: number;
+  fundingIntervalHours: number;
   longShortRatio: number;
   longRatio: number;
   shortRatio: number;
   liqLongUsd: number;
   liqShortUsd: number;
+  liqEstimated: boolean;
   netCvd: number;
   orderbookBids: [number, number][];
   orderbookAsks: [number, number][];
@@ -30,7 +34,9 @@ interface ExchangeMrData {
 
 interface AggregatedMrData {
   totalOI: number;
+  oiDelta: number;
   avgFunding: number;
+  nearestFundingTime: number;
   combinedLongRatio: number;
   combinedShortRatio: number;
   combinedLongShortRatio: number;
@@ -77,6 +83,18 @@ function fmtRatio(n: number): string {
   return n.toFixed(2);
 }
 
+/** ms epoch → "2h 15m 30s" countdown string */
+function fmtCountdown(targetMs: number, nowMs: number): string {
+  const diff = targetMs - nowMs;
+  if (diff <= 0) return 'NOW';
+  const h = Math.floor(diff / 3_600_000);
+  const m = Math.floor((diff % 3_600_000) / 60_000);
+  const s = Math.floor((diff % 60_000) / 1_000);
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
 // ── Component ───────────────────────────────────────────────────────────────
 
 export default function CoinMRPanel() {
@@ -85,7 +103,14 @@ export default function CoinMRPanel() {
   const [data, setData] = useState<MrResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now());
   const depthCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // ── 1s tick for funding countdown ───────────────────────────────────────
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   // ── Data fetch ──────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
@@ -222,13 +247,19 @@ export default function CoinMRPanel() {
             <SummaryCard
               label="Total Open Interest"
               value={fmtUsd(data.aggregated.totalOI)}
+              sub={`${timeframe.toUpperCase()} Δ: ${data.aggregated.oiDelta >= 0 ? '+' : ''}${fmtUsd(data.aggregated.oiDelta)}`}
               color="#00bfff"
+              subColor={data.aggregated.oiDelta >= 0 ? '#50ff50' : '#ff5050'}
               large
             />
             <SummaryCard
               label="Avg Funding Rate"
               value={fmtPct(data.aggregated.avgFunding)}
               color={data.aggregated.avgFunding >= 0 ? '#50ff50' : '#ff5050'}
+              sub={data.aggregated.nearestFundingTime > 0
+                ? `Next: ${fmtCountdown(data.aggregated.nearestFundingTime, now)}`
+                : undefined}
+              subColor="#ff9900"
               large
             />
             <SummaryCard
@@ -260,9 +291,9 @@ export default function CoinMRPanel() {
             gap: 12,
             marginBottom: 24,
           }}>
-            <ExchangeColumn label="BINANCE" data={data.exchanges.binance} color="#f0b90b" />
-            <ExchangeColumn label="BYBIT" data={data.exchanges.bybit} color="#ff6600" />
-            <ExchangeColumn label="OKX" data={data.exchanges.okx} color="#00e5ff" />
+            <ExchangeColumn label="BINANCE" data={data.exchanges.binance} color="#f0b90b" now={now} />
+            <ExchangeColumn label="BYBIT" data={data.exchanges.bybit} color="#ff6600" now={now} />
+            <ExchangeColumn label="OKX" data={data.exchanges.okx} color="#00e5ff" now={now} />
           </div>
 
           {/* ═══════════ ALT BÖLÜM — KÜMÜLATİF DEPTH CHART ═══════════ */}
@@ -341,11 +372,12 @@ function SectionTitle({ text }: { text: string }) {
   );
 }
 
-function SummaryCard({ label, value, color, sub, large }: {
+function SummaryCard({ label, value, color, sub, subColor, large }: {
   label: string;
   value: string;
   color: string;
   sub?: string;
+  subColor?: string;
   large?: boolean;
 }) {
   return (
@@ -370,16 +402,17 @@ function SummaryCard({ label, value, color, sub, large }: {
         {value}
       </div>
       {sub && (
-        <div style={{ fontSize: 10, color: '#888' }}>{sub}</div>
+        <div style={{ fontSize: 10, color: subColor ?? '#888', fontWeight: subColor ? 700 : 400 }}>{sub}</div>
       )}
     </div>
   );
 }
 
-function ExchangeColumn({ label, data, color }: {
+function ExchangeColumn({ label, data, color, now }: {
   label: string;
   data: ExchangeMrData;
   color: string;
+  now: number;
 }) {
   return (
     <div style={{
@@ -402,7 +435,18 @@ function ExchangeColumn({ label, data, color }: {
       </div>
 
       <ExchangeRow label="Open Interest" value={fmtUsd(data.openInterest)} />
+      <ExchangeRow label="OI Delta" value={`${data.oiDelta >= 0 ? '+' : ''}${fmtUsd(data.oiDelta)}`} color={data.oiDelta >= 0 ? '#50ff50' : '#ff5050'} />
       <ExchangeRow label="Funding Rate" value={fmtPct(data.fundingRate)} color={data.fundingRate >= 0 ? '#50ff50' : '#ff5050'} />
+      <ExchangeRow
+        label="Next Funding"
+        value={data.nextFundingTime > 0 ? fmtCountdown(data.nextFundingTime, now) : '—'}
+        color="#ff9900"
+      />
+      <ExchangeRow
+        label="Funding Interval"
+        value={data.fundingIntervalHours > 0 ? `${data.fundingIntervalHours}h` : '—'}
+        color="#888"
+      />
       <ExchangeRow label="Net CVD" value={fmtUsd(data.netCvd)} color={data.netCvd >= 0 ? '#50ff50' : '#ff5050'} />
       <ExchangeRow label="L/S Ratio" value={fmtRatio(data.longShortRatio)} color={data.longShortRatio >= 1 ? '#50ff50' : '#ff5050'} />
       <ExchangeRow label="Long %" value={(data.longRatio * 100).toFixed(1) + '%'} color="#50ff50" />
@@ -410,8 +454,21 @@ function ExchangeColumn({ label, data, color }: {
 
       <div style={{ height: 1, background: '#1a1a2e', margin: '8px 0' }} />
 
-      <ExchangeRow label="Liq. Longs" value={fmtUsd(data.liqLongUsd)} color="#ff5050" />
-      <ExchangeRow label="Liq. Shorts" value={fmtUsd(data.liqShortUsd)} color="#50ff50" />
+      <ExchangeRow
+        label={data.liqEstimated ? 'Liq. Longs ~' : 'Liq. Longs'}
+        value={fmtUsd(data.liqLongUsd)}
+        color="#ff5050"
+      />
+      <ExchangeRow
+        label={data.liqEstimated ? 'Liq. Shorts ~' : 'Liq. Shorts'}
+        value={fmtUsd(data.liqShortUsd)}
+        color="#50ff50"
+      />
+      {data.liqEstimated && (
+        <div style={{ fontSize: 8, color: '#555', textAlign: 'right', marginTop: 2 }}>
+          OI ağırlıklı tahmin (API yok)
+        </div>
+      )}
     </div>
   );
 }
@@ -485,8 +542,8 @@ function drawDepthChart(
     ? (sortedBids[0]![0] + sortedAsks[0]![0]) / 2
     : (sortedBids[0]?.[0] ?? sortedAsks[0]?.[0] ?? 0);
 
-  // Show ±2% from mid
-  const range = midPrice * 0.02;
+  // Show ±2.5% from mid
+  const range = midPrice * 0.025;
   const minPrice = midPrice - range;
   const maxPrice = midPrice + range;
   const maxVol = Math.max(
@@ -590,28 +647,37 @@ function drawDepthChart(
   ];
   allLevels.sort((a, b) => b.qty - a.qty);
   const topWalls = allLevels.slice(0, 5);
+  const labelMinGap = 65; // px minimum horizontal gap between labels
+  const placedLabelXs: number[] = [];
 
   for (const wall of topWalls) {
     const wx = priceToX(wall.price);
+
+    // Draw vertical line always
+    ctx.strokeStyle = wall.side === 'bid' ? '#50ff5033' : '#ff505033';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(wx, 20); ctx.lineTo(wx, 20 + chartH); ctx.stroke();
+
+    // Skip label if overlaps with already placed one
+    if (placedLabelXs.some(px => Math.abs(px - wx) < labelMinGap)) continue;
+    placedLabelXs.push(wx);
+
     const wy = 20 + chartH * 0.1;
     ctx.fillStyle = wall.side === 'bid' ? '#50ff50aa' : '#ff5050aa';
     ctx.font = 'bold 9px monospace';
     ctx.textAlign = 'center';
     ctx.fillText(`$${wall.price.toFixed(0)}`, wx, wy - 6);
     ctx.fillText(`${fmt(wall.qty)}`, wx, wy + 6);
-
-    // Mark line
-    ctx.strokeStyle = wall.side === 'bid' ? '#50ff5033' : '#ff505033';
-    ctx.lineWidth = 0.5;
-    ctx.beginPath(); ctx.moveTo(wx, 20); ctx.lineTo(wx, 20 + chartH); ctx.stroke();
   }
 
-  // Price axis labels
+  // Price axis labels — adaptive count to prevent overlap
   ctx.fillStyle = '#555';
   ctx.font = '9px monospace';
   ctx.textAlign = 'center';
-  for (let i = 0; i <= 8; i++) {
-    const p = minPrice + ((maxPrice - minPrice) / 8) * i;
+  const pxPerLabel = 80;
+  const labelCount = Math.max(3, Math.min(8, Math.floor(chartW / pxPerLabel)));
+  for (let i = 0; i <= labelCount; i++) {
+    const p = minPrice + ((maxPrice - minPrice) / labelCount) * i;
     const x = priceToX(p);
     ctx.fillText('$' + p.toFixed(0), x, 20 + chartH + 14);
   }

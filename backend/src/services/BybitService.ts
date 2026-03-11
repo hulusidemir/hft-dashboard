@@ -148,12 +148,13 @@ export class BybitService extends BaseExchangeService {
    */
   protected buildSubscribeMessages(symbol: string): object[] {
     const bSymbol = getExchangeSymbol(symbol, Exchange.BYBIT); // "BTCUSDT"
+    // NOT: Bybit V5 liquidation WS topic'i deprecated ("handler not found").
+    // Sadece orderbook ve publicTrade kanallarına abone ol.
     return [{
       op: 'subscribe',
       args: [
         `orderbook.50.${bSymbol}`,
         `publicTrade.${bSymbol}`,
-        `liquidation.${bSymbol}`,
       ],
     }];
   }
@@ -220,8 +221,6 @@ export class BybitService extends BaseExchangeService {
         this.handleOrderBook(msg as unknown as BybitWsMessage);
       } else if (topic.startsWith('publicTrade.')) {
         this.handleTrade(msg as unknown as BybitWsMessage);
-      } else if (topic.startsWith('liquidation.')) {
-        this.handleLiquidation(msg as unknown as BybitWsMessage);
       } else {
         this.log.debug('Bilinmeyen Bybit topic', { topic, type });
       }
@@ -297,21 +296,6 @@ export class BybitService extends BaseExchangeService {
       }
     } catch (err) {
       this.log.error('Trade işleme hatası', err instanceof Error ? err : new Error(String(err)));
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Liquidation İşleme
-  // ─────────────────────────────────────────────────────────────────────────
-
-  private handleLiquidation(msg: BybitWsMessage): void {
-    try {
-      const liq = this.parseLiquidation(msg);
-      if (liq) {
-        this.emit('liquidation', liq);
-      }
-    } catch (err) {
-      this.log.error('Liquidation işleme hatası', err instanceof Error ? err : new Error(String(err)));
     }
   }
 

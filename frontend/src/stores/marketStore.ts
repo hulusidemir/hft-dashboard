@@ -200,7 +200,7 @@ export function resetStore(): void {
     cvd: 0,
     openInterest: null,
     liquidations: [],
-    lastMessageAt: 0,
+    lastMessageAt: Date.now(),   // 0 yerine Date.now() — stale algılama bekleme payı
   });
   console.log('[marketStore] Store sıfırlandı');
 }
@@ -208,7 +208,16 @@ export function resetStore(): void {
 // ── Message Handlers ────────────────────────────────────────────────────────
 
 function handleOrderBook(data: unknown): void {
-  marketStore.setState({ orderbook: data as UnifiedOrderBook, lastMessageAt: Date.now() });
+  const updates: Partial<MarketState> = {
+    orderbook: data as UnifiedOrderBook,
+    lastMessageAt: Date.now(),
+  };
+  // Sembol değişikliği warmup tamamlandı — ilk gerçek veri geldi
+  if (marketStore.getState().isChangingSymbol) {
+    updates.isChangingSymbol = false;
+    console.log('[marketStore] İlk orderbook verisi geldi — isChangingSymbol temizlendi');
+  }
+  marketStore.setState(updates);
 }
 
 function handleTrades(data: unknown): void {
@@ -219,11 +228,17 @@ function handleTrades(data: unknown): void {
     ? [...batch.trades, ...prev].slice(0, MAX_TRADES)
     : [...batch.trades, ...prev];
 
-  marketStore.setState({
+  const tradeUpdates: Partial<MarketState> = {
     trades: merged,
     cvd: batch.cvd,
     lastMessageAt: Date.now(),
-  });
+  };
+  // Sembol değişikliği warmup — ilk trade verisi geldi
+  if (marketStore.getState().isChangingSymbol) {
+    tradeUpdates.isChangingSymbol = false;
+    console.log('[marketStore] İlk trade verisi geldi — isChangingSymbol temizlendi');
+  }
+  marketStore.setState(tradeUpdates);
 
   // ── Whale Alarm — batch içinde $100K+ tekil işlem varsa ses tetikle ───
   if (marketStore.getState().isAlarmEnabled && audioManager.ready) {
@@ -239,9 +254,9 @@ function handleTrades(data: unknown): void {
     }
   }
 
-  // ── War Log — $100K+ balina işlemleri kaydet ──────────────────────
+  // ── War Log — Bybit/OKX balina ($100K+) — Binance whale'ler GlobalTradeListener'dan gelir
   for (const t of batch.trades) {
-    if (t.quoteQty >= 100_000) {
+    if (t.quoteQty >= 100_000 && t.exchange !== 'BINANCE') {
       pushWarLog({
         timestamp: t.timestamp,
         type: t.side === 'BUY' ? 'WHALE_BUY' : 'WHALE_SELL',
@@ -268,17 +283,8 @@ function handleLiquidation(data: unknown): void {
   if (marketStore.getState().isAlarmEnabled && audioManager.ready && liq.quoteQty >= 50_000) {
     audioManager.playLiquidation();
   }
-  // ── War Log — $50K+ tasfiye kaydet ─────────────────────────────
-  if (liq.quoteQty >= 50_000) {
-    pushWarLog({
-      timestamp: liq.timestamp,
-      type: liq.side === 'LONG' ? 'LIQ_LONG' : 'LIQ_SHORT',
-      symbol: liq.symbol,
-      price: liq.price,
-      quoteQty: liq.quoteQty,
-      exchange: liq.exchange,
-    });
-  }}
+  // War Log artık global stream'den (war_log topic) geliyor — burada push YAPILMAZ
+}
 
 function handleOpenInterest(data: unknown): void {
   marketStore.setState({ openInterest: data as UnifiedOpenInterest, lastMessageAt: Date.now() });
@@ -289,8 +295,12 @@ function handleInit(data: unknown): void {
   marketStore.setState({
     currentSymbol: payload.symbol,
     symbolList: payload.symbols,
+    lastMessageAt: Date.now(),   // Stale algılama grace period — veri akana kadar bekleme payı
   });
   console.log(`[marketStore] Init: symbol=${payload.symbol}, ${payload.symbols.length} symbols available`);
+  // SQLite'tan son tasfiye kayıtlarını çek — feed'i başlangıçta doldur
+  fetchRecentLiquidations(payload.symbol);
+  startLiqPoll(payload.symbol);
 }
 
 function handleSymbolSwitching(data: unknown): void {
@@ -305,9 +315,12 @@ function handleSymbolChanged(data: unknown): void {
   const payload = data as { symbol: string };
   marketStore.setState({
     currentSymbol: payload.symbol,
-    isChangingSymbol: false,
+    lastMessageAt: Date.now(),
   });
-  console.log(`[marketStore] Sembol değişikliği tamamlandı: ${payload.symbol}`);
+  console.log(`[marketStore] Sembol değişikliği tamamlandı: ${payload.symbol} — veri bekleniyor...`);
+  // Yeni sembol için son tasfiye kayıtlarını çek + periyodik poll başlat
+  fetchRecentLiquidations(payload.symbol);
+  startLiqPoll(payload.symbol);
 }
 
 function handleSymbolError(data: unknown): void {
@@ -316,12 +329,40 @@ function handleSymbolError(data: unknown): void {
   console.error(`[marketStore] Sembol değişikliği hatası: ${payload.error}`);
 }
 
+// ── War Log Global Handler — Backend'den gelen global balina + tasfiye olayları
+function handleWarLog(data: unknown): void {
+  const entry = data as Omit<WarLogEntry, 'id'>;
+  pushWarLog(entry);
+
+  // Global tasfiye alarm — ses tetikle
+  if (
+    marketStore.getState().isAlarmEnabled && audioManager.ready &&
+    (entry.type === 'LIQ_LONG' || entry.type === 'LIQ_SHORT') &&
+    entry.quoteQty >= 50_000
+  ) {
+    audioManager.playLiquidation();
+  }
+  // Global whale alarm — ses tetikle
+  if (
+    marketStore.getState().isAlarmEnabled && audioManager.ready &&
+    (entry.type === 'WHALE_BUY' || entry.type === 'WHALE_SELL') &&
+    entry.quoteQty >= 100_000
+  ) {
+    if (entry.type === 'WHALE_BUY') {
+      audioManager.playWhaleBuy();
+    } else {
+      audioManager.playWhaleSell();
+    }
+  }
+}
+
 // ── Topic Router ────────────────────────────────────────────────────────────
 const TOPIC_HANDLERS: Record<string, (data: unknown) => void> = {
   lob:              handleOrderBook,
   trades:           handleTrades,
   liquidations:     handleLiquidation,
   oi:               handleOpenInterest,
+  war_log:          handleWarLog,
   init:             handleInit,
   symbol_switching:  handleSymbolSwitching,
   symbol_changed:   handleSymbolChanged,
@@ -437,6 +478,72 @@ export async function fetchSymbolList(): Promise<string[]> {
   }
 }
 
+// ── Son Tasfiye Kayıtlarını SQLite'tan Çek ──────────────────────────────────
+// İlk bağlantı, sembol değişikliği ve periyodik poll ile feed'i güncel tutar.
+let liqPollTimer: ReturnType<typeof setInterval> | null = null;
+const LIQ_POLL_INTERVAL = 15_000; // 15 saniye
+
+async function fetchRecentLiquidations(symbol: string): Promise<void> {
+  try {
+    const resp = await fetch(`${REST_BASE}/api/liquidations/recent?symbol=${symbol}&limit=50`);
+    if (!resp.ok) return;
+    const rows = await resp.json() as Array<{
+      exchange: string; symbol: string; side: string;
+      price: number; qty: number; usdValue: number; timestamp: number;
+    }>;
+    if (!rows.length) return;
+
+    const EXCHANGE_MAP: Record<string, string> = { binance: 'BINANCE', bybit: 'BYBIT', okx: 'OKX' };
+    const incoming: UnifiedLiquidation[] = rows.map(r => ({
+      id: `${r.exchange}_liq_${r.timestamp}_${r.price}`,
+      symbol: r.symbol,
+      exchange: EXCHANGE_MAP[r.exchange] ?? r.exchange.toUpperCase(),
+      side: (r.side === 'long' ? 'LONG' : 'SHORT') as 'LONG' | 'SHORT',
+      price: r.price,
+      quantity: r.qty,
+      quoteQty: r.usdValue,
+      timestamp: r.timestamp,
+    }));
+
+    // Mevcut feed ile birleştir — tekrar eden id'leri filtrele
+    const current = marketStore.getState().liquidations;
+    const existingIds = new Set(current.map(l => l.id));
+    const newOnes = incoming.filter(l => !existingIds.has(l.id));
+
+    if (newOnes.length > 0 || current.length === 0) {
+      // Tümünü birleştir, timestamp'e göre sırala (yeniden eskiye), limit uygula
+      const merged = [...current, ...newOnes]
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .slice(0, MAX_LIQUIDATIONS);
+      marketStore.setState({ liquidations: merged });
+      if (current.length === 0) {
+        console.log(`[marketStore] ${merged.length} geçmiş tasfiye kaydı yüklendi (${symbol})`);
+      } else if (newOnes.length > 0) {
+        console.log(`[marketStore] ${newOnes.length} yeni tasfiye eklendi (REST poll, ${symbol})`);
+      }
+    }
+  } catch {
+    // Sessiz hata — WS üzerinden veri akacak
+  }
+}
+
+/** Periyodik tasfiye REST poll başlat/yenile (sembol değiştiğinde çağrılır) */
+function startLiqPoll(symbol: string): void {
+  stopLiqPoll();
+  // İlk fetch zaten handleInit/handleSymbolChanged'den yapılıyor
+  liqPollTimer = setInterval(() => {
+    const currentSym = marketStore.getState().currentSymbol;
+    if (currentSym) fetchRecentLiquidations(currentSym);
+  }, LIQ_POLL_INTERVAL);
+}
+
+function stopLiqPoll(): void {
+  if (liqPollTimer) {
+    clearInterval(liqPollTimer);
+    liqPollTimer = null;
+  }
+}
+
 // ── Public API ──────────────────────────────────────────────────────────────
 export function startMarketConnection(): void {
   intentionalClose = false;
@@ -445,6 +552,7 @@ export function startMarketConnection(): void {
 
 export function stopMarketConnection(): void {
   intentionalClose = true;
+  stopLiqPoll();
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;

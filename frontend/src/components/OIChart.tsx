@@ -152,17 +152,22 @@ export default function OIChart({ onChartReady }: OIChartProps) {
       const cumulativeDelta = oi.totalOI - initialTotalOIRef.current;
       lastCumulativeDeltaRef.current = cumulativeDelta;
 
-      // ── Optimization: sadece değer veya zaman değiştiyse güncelle ─────
+      // ── Optimization: sadece zaman ilerlediğinde güncelle ──────────────
       const last = lastPlottedRef.current;
+      if (timeSec < last.time) return; // Geriye gitme yasak
       if (timeSec === last.time && cumulativeDelta === last.value) return;
 
       lastPlottedRef.current = { time: timeSec, value: cumulativeDelta };
 
       // Grafiğe bas
-      series.update({
-        time: timeSec as UTCTimestamp,
-        value: cumulativeDelta,
-      });
+      try {
+        series.update({
+          time: timeSec as UTCTimestamp,
+          value: cumulativeDelta,
+        });
+      } catch {
+        // lightweight-charts "Cannot update oldest data" — ignore
+      }
 
       // Lejantı aynı değerle güncelle — sıfır sapma
       updateLegend(cumulativeDelta);
@@ -188,14 +193,18 @@ export default function OIChart({ onChartReady }: OIChartProps) {
       const timeSec = Math.floor(now / 1000) + TZ_CVD;
       const val    = lastCumulativeDeltaRef.current;
 
-      // Aynı saniyeyi aynı değerle tekrar basma
-      if (timeSec === lastPlottedRef.current.time && val === lastPlottedRef.current.value) return;
+      // Aynı saniyeyi aynı değerle tekrar basma veya geriye gitme
+      if (timeSec <= lastPlottedRef.current.time) return;
 
       lastPlottedRef.current = { time: timeSec, value: val };
-      series.update({
-        time: timeSec as UTCTimestamp,
-        value: val,
-      });
+      try {
+        series.update({
+          time: timeSec as UTCTimestamp,
+          value: val,
+        });
+      } catch {
+        // lightweight-charts "Cannot update oldest data" — ignore
+      }
     });
 
     // expose chart for cross-sync

@@ -17,14 +17,16 @@ import type { ITradeWithCVD } from './interfaces/IUnifiedTrade.js';
 import type { IUnifiedLiquidation } from './interfaces/IUnifiedLiquidation.js';
 import type { IUnifiedOpenInterest } from './interfaces/IUnifiedOpenInterest.js';
 import { fetchMrData } from './services/MrService.js';
+import { getRecentLiquidations } from './db/LiquidationDB.js';
 
 // ── Topic Constants ──────────────────────────────────────────────────────────
 const TOPIC_LOB          = 'lob';
 const TOPIC_TRADES       = 'trades';
 const TOPIC_LIQUIDATIONS = 'liquidations';
 const TOPIC_OI           = 'oi';
+const TOPIC_WAR_LOG      = 'war_log';
 
-const ALL_TOPICS = [TOPIC_LOB, TOPIC_TRADES, TOPIC_LIQUIDATIONS, TOPIC_OI] as const;
+const ALL_TOPICS = [TOPIC_LOB, TOPIC_TRADES, TOPIC_LIQUIDATIONS, TOPIC_OI, TOPIC_WAR_LOG] as const;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface WSUserData {
@@ -60,6 +62,10 @@ interface ServerHandle {
   app: uWS.TemplatedApp;
   listenSocket: uWS.us_listen_socket | null;
   close: () => void;
+  /** Global war log entry yayınla (tasfiye + balina) */
+  publishWarLog: (entry: unknown) => void;
+  /** Frontend liquidation feed'e doğrudan yayınla */
+  publishLiquidation: (data: IUnifiedLiquidation) => void;
 }
 
 interface ServerOptions {
@@ -164,6 +170,18 @@ export function startServer(options: ServerOptions): Promise<ServerHandle> {
       });
   });
 
+  // ── Recent Liquidations REST endpoint ──────────────────────────────────────
+  app.get('/api/liquidations/recent', (res, req) => {
+    const symbol = (req.getQuery('symbol') || getCurrentSymbol()).toUpperCase();
+    const limit = Math.min(Number(req.getQuery('limit')) || 50, 200);
+    res.cork(() => {
+      applyCors(res);
+      res.writeHeader('Content-Type', 'application/json');
+      const rows = getRecentLiquidations(symbol, limit);
+      res.end(JSON.stringify(rows));
+    });
+  });
+
   // ── CORS preflight handler ────────────────────────────────────────────────
   app.options('/*', (res, _req) => {
     res.cork(() => {
@@ -257,11 +275,19 @@ export function startServer(options: ServerOptions): Promise<ServerHandle> {
             .catch((err) => {
               isChangingSymbol = false;
               log.error('Sembol değişikliği başarısız', err instanceof Error ? err : new Error(String(err)));
+
+              // Hata mesajını TÜM client'lara yayınla — tek client'a değil
               const errorMsg = encode({
                 t: 'symbol_error',
                 d: { error: err instanceof Error ? err.message : String(err) },
               });
-              ws.send(errorMsg, true, false);
+              app.publish(TOPIC_LOB, errorMsg, true, false);
+
+              // Kurtarma sonrası eski sembole geri dönüldüyse bunu da bildir
+              const recoveredSymbol = getCurrentSymbol();
+              const recoveredMsg = encode({ t: 'symbol_changed', d: { symbol: recoveredSymbol } });
+              app.publish(TOPIC_LOB, recoveredMsg, true, false);
+              log.info(`Eski sembole geri dönüldü: ${recoveredSymbol}`);
             });
         }
       } catch {
@@ -332,6 +358,16 @@ export function startServer(options: ServerOptions): Promise<ServerHandle> {
           close: () => {
             uWS.us_listen_socket_close(listenSocket);
             log.info('uWebSockets.js server closed');
+          },
+          publishWarLog: (entry: unknown) => {
+            if (activeConnections === 0) return;
+            const packed = packMessage(TOPIC_WAR_LOG, entry);
+            app.publish(TOPIC_WAR_LOG, packed, true, false);
+          },
+          publishLiquidation: (data: IUnifiedLiquidation) => {
+            if (activeConnections === 0) return;
+            const packed = packMessage(TOPIC_LIQUIDATIONS, data);
+            app.publish(TOPIC_LIQUIDATIONS, packed, true, false);
           },
         };
         resolve(handle);

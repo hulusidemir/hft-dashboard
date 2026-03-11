@@ -17,6 +17,7 @@ import TopBar from './components/TopBar';
 function StatusBar() {
   const connected      = useMarketStore((s) => s.connected);
   const reconnectCount = useMarketStore((s) => s.reconnectCount);
+  const isChanging     = useMarketStore((s) => s.isChangingSymbol);
   const oi             = useMarketStore((s) => s.openInterest);
 
   return (
@@ -39,10 +40,14 @@ function StatusBar() {
         </span>
         <TopBar />
         <span style={{
-          color: connected ? '#50ff50' : '#ff5050',
+          color: connected ? (isChanging ? '#ffaa00' : '#50ff50') : '#ff5050',
           fontWeight: 600,
         }}>
-          {connected ? '● LIVE' : `○ OFFLINE${reconnectCount > 0 ? ` (retry ${reconnectCount})` : ''}`}
+          {!connected
+            ? `○ OFFLINE${reconnectCount > 0 ? ` (retry ${reconnectCount})` : ''}`
+            : isChanging
+              ? '◌ SWITCHING...'
+              : '● LIVE'}
         </span>
       </div>
       <div style={{ display: 'flex', gap: 14 }}>
