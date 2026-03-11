@@ -97,6 +97,28 @@ function fmtCountdown(targetMs: number, nowMs: number): string {
 
 // ── Component ───────────────────────────────────────────────────────────────
 
+// ── CoinGecko Coin Info tipi ─────────────────────────────────────────────────
+interface CoinInfo {
+  symbol: string;
+  name: string;
+  image: string;
+  marketCap: number;
+  marketCapRank: number | null;
+  categories: string[];
+  descriptionTr: string;
+  descriptionEn: string;
+  genesisDate: string | null;
+  homepage: string;
+  twitter: string;
+  telegram: string;
+  reddit: string;
+  discord: string;
+  github: string;
+  website: string;
+  spotExchanges: string[];
+  perpExchanges: string[];
+}
+
 export default function CoinMRPanel() {
   const currentSymbol = useMarketStore((s) => s.currentSymbol);
   const [timeframe, setTimeframe] = useState<Timeframe>('1h');
@@ -105,6 +127,8 @@ export default function CoinMRPanel() {
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const depthCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [coinInfo, setCoinInfo] = useState<CoinInfo | null>(null);
+  const [infoExpanded, setInfoExpanded] = useState(false);
 
   // ── 1s tick for funding countdown ───────────────────────────────────────
   useEffect(() => {
@@ -131,6 +155,18 @@ export default function CoinMRPanel() {
   useEffect(() => {
     void fetchData();
   }, [fetchData]);
+
+  // ── CoinGecko coin info fetch ───────────────────────────────────────────
+  useEffect(() => {
+    setCoinInfo(null);
+    setInfoExpanded(false);
+    let cancelled = false;
+    fetch(`${REST_BASE}/api/coin-info?symbol=${currentSymbol}`)
+      .then((r) => r.ok ? r.json() as Promise<CoinInfo> : null)
+      .then((info) => { if (!cancelled && info) setCoinInfo(info); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [currentSymbol]);
 
   // ── Depth Chart Canvas ──────────────────────────────────────────────────
   useEffect(() => {
@@ -229,6 +265,197 @@ export default function CoinMRPanel() {
 
       {data && (
         <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px' }}>
+
+          {/* ═══════════ COIN BİLGİSİ (CoinGecko) ═════════════════════ */}
+          {coinInfo && (
+            <div style={{
+              background: '#0c0c14',
+              border: '1px solid #1a1a2e',
+              borderRadius: 10,
+              padding: '14px 20px',
+              marginBottom: 20,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+              position: 'relative',
+            }}>
+              {/* Sağ üst: Borsa listeleme rozetleri — Spot & Perp */}
+              <div style={{
+                position: 'absolute',
+                top: 8,
+                right: 14,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 4,
+                alignItems: 'flex-end',
+              }}>
+                {([['SPOT', coinInfo.spotExchanges], ['PERP', coinInfo.perpExchanges]] as const).map(([label, list]) => (
+                  <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{
+                      fontSize: 8,
+                      fontWeight: 800,
+                      color: label === 'SPOT' ? '#888' : '#666',
+                      letterSpacing: 1,
+                      width: 30,
+                      textAlign: 'right',
+                    }}>{label}</span>
+                    {(['Binance', 'Coinbase', 'OKX', 'Bybit'] as const).map((ex) => {
+                      const listed = list.includes(ex);
+                      return (
+                        <span
+                          key={ex}
+                          title={listed ? `${ex} ${label}` : `${ex} ${label} yok`}
+                          style={{
+                            fontSize: 8,
+                            fontWeight: 700,
+                            padding: '1px 6px',
+                            borderRadius: 3,
+                            letterSpacing: 0.3,
+                            background: listed ? (label === 'SPOT' ? '#18422a' : '#1a2a4a') : '#1a1a22',
+                            color: listed ? (label === 'SPOT' ? '#4ade80' : '#60a5fa') : '#333',
+                            border: `1px solid ${listed ? (label === 'SPOT' ? '#2d7a4a' : '#2d4a7a') : '#222'}`,
+                            opacity: listed ? 1 : 0.45,
+                          }}
+                        >
+                          {ex}
+                        </span>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+              {/* Üst satır: Logo + İsim + Market Cap + Rank + Kategoriler */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                {coinInfo.image && (
+                  <img
+                    src={coinInfo.image}
+                    alt={coinInfo.name}
+                    style={{ width: 32, height: 32, borderRadius: 6 }}
+                  />
+                )}
+                <span style={{ fontSize: 16, fontWeight: 900, color: '#fff' }}>
+                  {coinInfo.name}
+                </span>
+                {coinInfo.marketCapRank && (
+                  <span style={{
+                    background: '#ff990022',
+                    color: '#ff9900',
+                    fontSize: 10,
+                    fontWeight: 800,
+                    padding: '2px 8px',
+                    borderRadius: 4,
+                  }}>
+                    #{coinInfo.marketCapRank}
+                  </span>
+                )}
+                <span style={{ fontSize: 13, color: '#00bfff', fontWeight: 600 }}>
+                  MCap: ${coinInfo.marketCap >= 1e9
+                    ? (coinInfo.marketCap / 1e9).toFixed(2) + 'B'
+                    : coinInfo.marketCap >= 1e6
+                      ? (coinInfo.marketCap / 1e6).toFixed(1) + 'M'
+                      : fmt(coinInfo.marketCap)}
+                </span>
+                {/* Kategoriler */}
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {coinInfo.categories.slice(0, 4).map((cat, i) => (
+                    <span
+                      key={i}
+                      style={{
+                        background: '#151520',
+                        border: '1px solid #2a2a3a',
+                        borderRadius: 4,
+                        padding: '2px 8px',
+                        fontSize: 9,
+                        color: '#888',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {cat}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Sosyal linkler */}
+              {(() => {
+                const links: { url: string; label: string; icon: string }[] = [];
+                if (coinInfo.website) links.push({ url: coinInfo.website, label: 'Website', icon: '🌐' });
+                if (coinInfo.twitter) links.push({ url: coinInfo.twitter, label: 'X / Twitter', icon: '𝕏' });
+                if (coinInfo.telegram) links.push({ url: coinInfo.telegram, label: 'Telegram', icon: '✈️' });
+                if (coinInfo.discord) links.push({ url: coinInfo.discord, label: 'Discord', icon: '💬' });
+                if (coinInfo.reddit) links.push({ url: coinInfo.reddit, label: 'Reddit', icon: '🔴' });
+                if (coinInfo.github) links.push({ url: coinInfo.github, label: 'GitHub', icon: '🐙' });
+                if (!links.length) return null;
+                return (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {links.map((l, i) => (
+                      <a
+                        key={i}
+                        href={l.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={l.label}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          background: '#151520',
+                          border: '1px solid #2a2a3a',
+                          borderRadius: 6,
+                          padding: '3px 10px',
+                          fontSize: 11,
+                          color: '#aaa',
+                          textDecoration: 'none',
+                          cursor: 'pointer',
+                          transition: 'border-color .15s',
+                        }}
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = '#ff9900'; }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = '#2a2a3a'; }}
+                      >
+                        <span style={{ fontSize: 13 }}>{l.icon}</span>
+                        <span>{l.label}</span>
+                      </a>
+                    ))}
+                  </div>
+                );
+              })()}
+
+              {/* Açıklama — collapse/expand */}
+              {(coinInfo.descriptionTr || coinInfo.descriptionEn) && (
+                <div>
+                  <button
+                    onClick={() => setInfoExpanded(!infoExpanded)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#ff9900',
+                      cursor: 'pointer',
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                      padding: 0,
+                      marginBottom: infoExpanded ? 6 : 0,
+                    }}
+                  >
+                    {infoExpanded ? '▼ Açıklamayı gizle' : '▶ Açıklamayı göster'}
+                  </button>
+                  {infoExpanded && (
+                    <div
+                      style={{
+                        fontSize: 11,
+                        lineHeight: '1.6',
+                        color: '#999',
+                        maxHeight: 200,
+                        overflow: 'auto',
+                      }}
+                      dangerouslySetInnerHTML={{
+                        __html: coinInfo.descriptionTr || coinInfo.descriptionEn,
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ═══════════ ÜST BÖLÜM — AGGREGATED ÖZET KARTLARI ═════════ */}
           <SectionTitle text="AGGREGATED SUMMARY" />
@@ -490,6 +717,40 @@ function ExchangeRow({ label, value, color }: { label: string; value: string; co
 
 // ── Depth Chart çizim fonksiyonu ────────────────────────────────────────────
 
+/** Dynamic price formatter — adjusts decimals based on price magnitude */
+function fmtDepthPrice(p: number): string {
+  if (p === 0) return '$0';
+  const abs = Math.abs(p);
+  if (abs >= 100000) return '$' + (p / 1000).toFixed(1) + 'K';
+  if (abs >= 10000)  return '$' + (p / 1000).toFixed(2) + 'K';
+  if (abs >= 1000)   return '$' + (p / 1000).toFixed(3) + 'K';
+  if (abs >= 100)    return '$' + p.toFixed(2);
+  if (abs >= 10)     return '$' + p.toFixed(3);
+  if (abs >= 1)      return '$' + p.toFixed(3);
+  // Sub-$1: show 4 significant digits after leading zeros
+  const digits = Math.max(4, -Math.floor(Math.log10(abs)) + 3);
+  return '$' + p.toFixed(digits);
+}
+
+/** Safe array max that doesn't blow the stack for large arrays */
+function safeMax(arr: number[], fallback = 1): number {
+  let m = fallback;
+  for (const v of arr) { if (v > m) m = v; }
+  return m;
+}
+
+/** Downsample a sorted array to at most maxN entries, keeping first and last */
+function downsample<T>(arr: T[], maxN: number): T[] {
+  if (arr.length <= maxN) return arr;
+  const result: T[] = [arr[0]!];
+  const step = (arr.length - 1) / (maxN - 1);
+  for (let i = 1; i < maxN - 1; i++) {
+    result.push(arr[Math.round(i * step)]!);
+  }
+  result.push(arr[arr.length - 1]!);
+  return result;
+}
+
 function drawDepthChart(
   canvas: HTMLCanvasElement,
   bids: [number, number][],
@@ -546,17 +807,17 @@ function drawDepthChart(
   const range = midPrice * 0.025;
   const minPrice = midPrice - range;
   const maxPrice = midPrice + range;
-  const maxVol = Math.max(
+  const maxVol = safeMax([
     ...bidCum.filter(b => b.price >= minPrice).map(b => b.vol),
     ...askCum.filter(a => a.price <= maxPrice).map(a => a.vol),
-    1,
-  );
+  ]);
 
-  const PAD = 40;
-  const chartW = W - PAD * 2;
+  const PAD_L = 55;
+  const PAD_R = 40;
+  const chartW = W - PAD_L - PAD_R;
   const chartH = H - 50;
 
-  const priceToX = (p: number) => PAD + ((p - minPrice) / (maxPrice - minPrice)) * chartW;
+  const priceToX = (p: number) => PAD_L + ((p - minPrice) / (maxPrice - minPrice)) * chartW;
   const volToY = (v: number) => 20 + chartH - (v / maxVol) * chartH;
 
   // Grid lines
@@ -564,7 +825,7 @@ function drawDepthChart(
   ctx.lineWidth = 0.5;
   for (let i = 0; i <= 4; i++) {
     const y = 20 + (chartH / 4) * i;
-    ctx.beginPath(); ctx.moveTo(PAD, y); ctx.lineTo(W - PAD, y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(W - PAD_R, y); ctx.stroke();
   }
 
   // Mid price line
@@ -578,10 +839,16 @@ function drawDepthChart(
   ctx.fillStyle = '#ff9900';
   ctx.font = '10px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(`Mid: $${midPrice.toFixed(2)}`, midX, 14);
+  ctx.fillText(`Mid: ${fmtDepthPrice(midPrice)}`, midX, 14);
+
+  // Downsample for smooth rendering (max ~1000 points per side)
+  const MAX_PTS = 1000;
 
   // Draw bid mountain (green)
-  const filteredBids = bidCum.filter(b => b.price >= minPrice && b.price <= maxPrice);
+  const filteredBids = downsample(
+    bidCum.filter(b => b.price >= minPrice && b.price <= maxPrice),
+    MAX_PTS,
+  );
   if (filteredBids.length > 0) {
     ctx.beginPath();
     ctx.moveTo(priceToX(filteredBids[0]!.price), volToY(0));
@@ -611,7 +878,10 @@ function drawDepthChart(
   }
 
   // Draw ask mountain (red)
-  const filteredAsks = askCum.filter(a => a.price >= minPrice && a.price <= maxPrice);
+  const filteredAsks = downsample(
+    askCum.filter(a => a.price >= minPrice && a.price <= maxPrice),
+    MAX_PTS,
+  );
   if (filteredAsks.length > 0) {
     ctx.beginPath();
     ctx.moveTo(priceToX(filteredAsks[0]!.price), volToY(0));
@@ -640,12 +910,12 @@ function drawDepthChart(
     ctx.stroke();
   }
 
-  // Find biggest walls (top 3 single levels by qty) and label them
+  // Find biggest walls — sort by USD value (qty × price) for fair comparison
   const allLevels = [
-    ...bids.filter(b => b[0] >= minPrice && b[0] <= maxPrice).map(b => ({ price: b[0], qty: b[1], side: 'bid' as const })),
-    ...asks.filter(a => a[0] >= minPrice && a[0] <= maxPrice).map(a => ({ price: a[0], qty: a[1], side: 'ask' as const })),
+    ...bids.filter(b => b[0] >= minPrice && b[0] <= maxPrice).map(b => ({ price: b[0], qty: b[1], usd: b[0] * b[1], side: 'bid' as const })),
+    ...asks.filter(a => a[0] >= minPrice && a[0] <= maxPrice).map(a => ({ price: a[0], qty: a[1], usd: a[0] * a[1], side: 'ask' as const })),
   ];
-  allLevels.sort((a, b) => b.qty - a.qty);
+  allLevels.sort((a, b) => b.usd - a.usd);
   const topWalls = allLevels.slice(0, 5);
   const labelMinGap = 65; // px minimum horizontal gap between labels
   const placedLabelXs: number[] = [];
@@ -666,20 +936,21 @@ function drawDepthChart(
     ctx.fillStyle = wall.side === 'bid' ? '#50ff50aa' : '#ff5050aa';
     ctx.font = 'bold 9px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(`$${wall.price.toFixed(0)}`, wx, wy - 6);
-    ctx.fillText(`${fmt(wall.qty)}`, wx, wy + 6);
+    ctx.fillText(fmtDepthPrice(wall.price), wx, wy - 6);
+    ctx.fillText(`$${fmt(wall.usd)}`, wx, wy + 6);
   }
 
   // Price axis labels — adaptive count to prevent overlap
   ctx.fillStyle = '#555';
   ctx.font = '9px monospace';
   ctx.textAlign = 'center';
-  const pxPerLabel = 80;
+  const sampleLabel = fmtDepthPrice(midPrice);
+  const pxPerLabel = Math.max(80, sampleLabel.length * 6 + 16);
   const labelCount = Math.max(3, Math.min(8, Math.floor(chartW / pxPerLabel)));
   for (let i = 0; i <= labelCount; i++) {
     const p = minPrice + ((maxPrice - minPrice) / labelCount) * i;
     const x = priceToX(p);
-    ctx.fillText('$' + p.toFixed(0), x, 20 + chartH + 14);
+    ctx.fillText(fmtDepthPrice(p), x, 20 + chartH + 14);
   }
 
   // Vol axis labels
@@ -687,6 +958,6 @@ function drawDepthChart(
   for (let i = 0; i <= 4; i++) {
     const v = (maxVol / 4) * (4 - i);
     const y = 20 + (chartH / 4) * i;
-    ctx.fillText(fmt(v), PAD - 4, y + 3);
+    ctx.fillText(fmt(v), PAD_L - 4, y + 3);
   }
 }

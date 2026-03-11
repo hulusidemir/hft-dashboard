@@ -1,18 +1,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// ChartPanel.tsx — Gerçek Zamanlı Candlestick (Mum) Grafiği
-// lightweight-charts v5 · 1 saniyelik mumlar · anlık price line
+// ChartPanel.tsx — Gerçek Zamanlı Çizgi (Line) Grafiği
+// lightweight-charts v5 · 1 saniyelik noktalar · anlık price line
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useRef, useEffect, useCallback } from 'react';
 import {
   createChart,
-  CandlestickSeries,
+  LineSeries,
   ColorType,
+  LineStyle,
 } from 'lightweight-charts';
 import type {
   IChartApi,
   ISeriesApi,
-  CandlestickData,
   UTCTimestamp,
   IPriceLine,
 } from 'lightweight-charts';
@@ -20,15 +20,19 @@ import { marketStore } from '../stores/marketStore';
 import type { UnifiedTrade } from '../stores/marketStore';
 
 // ── Config ──────────────────────────────────────────────────────────────────
-const CANDLE_INTERVAL_S = 1;          // 1 saniyelik mumlar
+const TICK_INTERVAL_S = 1;            // 1 saniyelik noktalar
 
-// ── Mum verisi tutma ────────────────────────────────────────────────────────
-interface LiveCandle {
-  time: number;   // UTC seconds — başlangıç zamanı
-  open: number;
-  high: number;
-  low: number;
-  close: number;
+/** Fiyata göre uygun precision ve minMove döndür */
+function pricePrecision(price: number): { precision: number; minMove: number } {
+  if (price >= 10_000) return { precision: 1, minMove: 0.1 };
+  if (price >= 1_000)  return { precision: 2, minMove: 0.01 };
+  if (price >= 100)    return { precision: 3, minMove: 0.001 };
+  if (price >= 10)     return { precision: 4, minMove: 0.0001 };
+  if (price >= 1)      return { precision: 4, minMove: 0.0001 };
+  if (price >= 0.1)    return { precision: 5, minMove: 0.00001 };
+  if (price >= 0.01)   return { precision: 6, minMove: 0.000001 };
+  if (price >= 0.001)  return { precision: 7, minMove: 0.0000001 };
+  return { precision: 8, minMove: 0.00000001 };
 }
 
 // ── Props ───────────────────────────────────────────────────────────────────
@@ -39,12 +43,12 @@ interface ChartPanelProps {
 export default function ChartPanel({ onChartReady }: ChartPanelProps) {
   const containerRef   = useRef<HTMLDivElement>(null);
   const chartRef       = useRef<IChartApi | null>(null);
-  const seriesRef      = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const seriesRef      = useRef<ISeriesApi<'Line'> | null>(null);
   const priceLineRef   = useRef<IPriceLine | null>(null);
-  const currentCandle  = useRef<LiveCandle | null>(null);
+  const lastTickTime   = useRef(0);
   const prevTradeLen   = useRef(0);
+  const precisionSet   = useRef(false);
 
-  // chart'ı dışarıya expose etmek için callback ref
   const chartReadyCb = useCallback((chart: IChartApi) => {
     if (onChartReady) onChartReady(chart);
   }, [onChartReady]);
@@ -53,7 +57,6 @@ export default function ChartPanel({ onChartReady }: ChartPanelProps) {
     const container = containerRef.current;
     if (!container) return;
 
-    // ── Chart oluştur ───────────────────────────────────────────────────
     const chart = createChart(container, {
       layout: {
         background: { type: ColorType.Solid, color: '#000000' },
@@ -71,14 +74,14 @@ export default function ChartPanel({ onChartReady }: ChartPanelProps) {
       },
       rightPriceScale: {
         borderColor: '#1a1a1a',
-        scaleMargins: { top: 0.05, bottom: 0.05 },
+        scaleMargins: { top: 0.1, bottom: 0.1 },
       },
       timeScale: {
         borderColor: '#1a1a1a',
         timeVisible: true,
         secondsVisible: true,
-        rightOffset: 12,
-        barSpacing: 6,
+        rightOffset: 5,
+        barSpacing: 4,
         shiftVisibleRangeOnNewBar: true,
         fixLeftEdge: false,
         fixRightEdge: false,
@@ -89,24 +92,28 @@ export default function ChartPanel({ onChartReady }: ChartPanelProps) {
 
     chartRef.current = chart;
 
-    // ── Candlestick Series ──────────────────────────────────────────────
-    const series = chart.addSeries(CandlestickSeries, {
-      upColor:          '#26a69a',
-      downColor:        '#ef5350',
-      borderUpColor:    '#26a69a',
-      borderDownColor:  '#ef5350',
-      wickUpColor:      '#26a69a',
-      wickDownColor:    '#ef5350',
+    // ── Line Series — başlangıçta genel precision, ilk trade'de güncellenir
+    const series = chart.addSeries(LineSeries, {
+      color: '#2196F3',
+      lineWidth: 2,
+      crosshairMarkerVisible: true,
+      crosshairMarkerRadius: 3,
+      priceFormat: {
+        type: 'price',
+        precision: 2,
+        minMove: 0.01,
+      },
     });
 
     seriesRef.current = series;
+    precisionSet.current = false;
 
-    // ── Price Line (anlık fiyat göstergesi) ─────────────────────────────
+    // ── Price Line ──────────────────────────────────────────────────────
     priceLineRef.current = series.createPriceLine({
       price: 0,
       color: '#ffaa00',
       lineWidth: 1,
-      lineStyle: 2,  // Dashed
+      lineStyle: LineStyle.Dashed,
       axisLabelVisible: true,
       title: 'Last',
     });
@@ -115,46 +122,37 @@ export default function ChartPanel({ onChartReady }: ChartPanelProps) {
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
-        if (width > 0 && height > 0) {
-          chart.resize(width, height);
-        }
+        if (width > 0 && height > 0) chart.resize(width, height);
       }
     });
     ro.observe(container);
 
-    // ── Store subscription — her trade batch geldiğinde mum güncelle ────
+    // ── Store subscription ──────────────────────────────────────────────
     const unsubscribe = marketStore.subscribe((state, prevState) => {
-      if (state.trades === prevState.trades) return;         // aynı referans → skip
+      if (state.trades === prevState.trades) return;
       if (state.trades.length === 0) return;
 
-      // Yeni gelen trade'leri bul
       const newCount = state.trades.length - prevTradeLen.current;
       prevTradeLen.current = state.trades.length;
 
-      // trades dizisi başa ekleniyor (en yeni = index 0)
-      // Yeni trade'ler: trades[0..newCount-1]
       const freshTrades = newCount > 0
         ? state.trades.slice(0, Math.min(newCount, state.trades.length))
-        : state.trades.slice(0, 1);   // fallback: minimum 1 trade
+        : state.trades.slice(0, 1);
 
-      // Zaman sırasına çevir (eski → yeni)
       const sorted = [...freshTrades].reverse();
-
       for (const trade of sorted) {
-        updateCandle(trade);
+        updateLine(trade);
       }
     });
 
-    // expose chart
     chartReadyCb(chart);
 
     // ── Double-click → scrollToRealTime ─────────────────────────────────
     const handleDblClick = () => {
-      try { chart.timeScale().scrollToRealTime(); } catch { /* chart removed */ }
+      try { chart.timeScale().scrollToRealTime(); } catch { /* */ }
     };
     container.addEventListener('dblclick', handleDblClick);
 
-    // ── Cleanup ─────────────────────────────────────────────────────────
     return () => {
       container.removeEventListener('dblclick', handleDblClick);
       unsubscribe();
@@ -163,62 +161,38 @@ export default function ChartPanel({ onChartReady }: ChartPanelProps) {
       chartRef.current  = null;
       seriesRef.current = null;
       priceLineRef.current = null;
-      currentCandle.current = null;
+      lastTickTime.current = 0;
       prevTradeLen.current = 0;
+      precisionSet.current = false;
     };
   }, [chartReadyCb]);
 
-  // ── Mum güncelleme mantığı ────────────────────────────────────────────
-  function updateCandle(trade: UnifiedTrade): void {
+  // ── Çizgi güncelleme ──────────────────────────────────────────────────
+  function updateLine(trade: UnifiedTrade): void {
     const series = seriesRef.current;
     if (!series) return;
 
-    const TZ_OFFSET    = 3 * 3600; // UTC+3 (Turkey)
+    const TZ_OFFSET    = 3 * 3600;
     const tradeTimeSec = Math.floor(trade.timestamp / 1000) + TZ_OFFSET;
-    const candleTime   = tradeTimeSec - (tradeTimeSec % CANDLE_INTERVAL_S);
+    const tickTime     = tradeTimeSec - (tradeTimeSec % TICK_INTERVAL_S);
     const price        = trade.price;
 
-    const candle = currentCandle.current;
+    if (tickTime < lastTickTime.current) return;
+    lastTickTime.current = tickTime;
 
-    if (!candle || candleTime > candle.time) {
-      // Yeni mum başlat
-      const newCandle: LiveCandle = {
-        time:  candleTime,
-        open:  price,
-        high:  price,
-        low:   price,
-        close: price,
-      };
-      currentCandle.current = newCandle;
-
-      try {
-        series.update({
-          time:  candleTime as UTCTimestamp,
-          open:  price,
-          high:  price,
-          low:   price,
-          close: price,
-        });
-      } catch { /* stale ts */ }
-    } else if (candleTime === candle.time) {
-      // Mevcut mumu güncelle
-      candle.close = price;
-      if (price > candle.high) candle.high = price;
-      if (price < candle.low)  candle.low  = price;
-
-      try {
-        series.update({
-          time:  candle.time as UTCTimestamp,
-          open:  candle.open,
-          high:  candle.high,
-          low:   candle.low,
-          close: candle.close,
-        });
-      } catch { /* stale ts */ }
+    // İlk trade geldiğinde precision'ı fiyata göre ayarla
+    if (!precisionSet.current && price > 0) {
+      precisionSet.current = true;
+      const pp = pricePrecision(price);
+      series.applyOptions({
+        priceFormat: { type: 'price', precision: pp.precision, minMove: pp.minMove },
+      });
     }
-    // else: geçmişe ait trade → yoksay
 
-    // Price Line güncelle
+    try {
+      series.update({ time: tickTime as UTCTimestamp, value: price });
+    } catch { /* stale ts */ }
+
     if (priceLineRef.current) {
       priceLineRef.current.applyOptions({ price });
     }

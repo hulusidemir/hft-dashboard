@@ -11,6 +11,7 @@ import LiquidationFeed from './components/LiquidationFeed';
 import SystemMonitor from './components/SystemMonitor';
 import RadarPanel from './components/RadarPanel';
 import CoinMRPanel from './components/CoinMRPanel';
+import ExchangesPanel from './components/ExchangesPanel';
 import TopBar from './components/TopBar';
 
 // ── Status Bar (düşük frekanslı — React re-render güvenli) ──────────────────
@@ -178,6 +179,12 @@ function App() {
           <CoinMRPanel />
         </div>
       )}
+      {/* ── EXCHANGES View ─────────────────────────────────────────────────── */}
+      {activeView === 'exchanges' && (
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <ExchangesPanel />
+        </div>
+      )}
       {/* ── Main Grid: 3 sütun (display:none ile gizle — WS kopmaz) ── */}
       <div style={{
         flex: 1,
@@ -223,7 +230,7 @@ function App() {
           overflow: 'hidden',
         }}>
           {/* Candlestick — %60 yükseklik */}
-          <PanelLabel text="Price · Candlestick 1s" />
+          <PanelLabel text="Price · Line 1s" />
           <div style={{ flex: 6, minHeight: 0 }}>
             <ChartPanel key={currentSymbol} onChartReady={onPriceChartReady} />
           </div>

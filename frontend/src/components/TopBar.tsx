@@ -159,6 +159,25 @@ export default function TopBar() {
       >
         COIN MR
       </button>
+      <button
+        onClick={() => setActiveView('exchanges')}
+        style={{
+          background: activeView === 'exchanges' ? '#1a0f00' : 'transparent',
+          border: `1px solid ${activeView === 'exchanges' ? '#ff9900' : '#333'}`,
+          borderRadius: 3,
+          padding: '2px 8px',
+          height: 20,
+          cursor: 'pointer',
+          fontFamily: 'monospace',
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: 1,
+          color: activeView === 'exchanges' ? '#ff9900' : '#555',
+          transition: 'all 0.15s',
+        }}
+      >
+        BORSALAR
+      </button>
     </div>
     <div ref={containerRef} style={{ position: 'relative', userSelect: 'none' }}>
       {/* ── Trigger Button ─────────────────────────────────────────────── */}

@@ -945,13 +945,30 @@ function mergeOrderbookSide(
   levels: [number, number][],
   direction: 'asc' | 'desc',
 ): [number, number][] {
+  if (levels.length === 0) return [];
+
+  // Find a reference price to determine adaptive tick size
+  let refPrice = 0;
+  for (const [price] of levels) {
+    if (price > 0) { refPrice = price; break; }
+  }
+  if (refPrice <= 0) return [];
+
+  // Adaptive tick: ~0.01% of price → ~500 levels in ±2.5% range
+  // Snap to a clean power-of-10 tick for deterministic rounding
+  const rawTick = refPrice * 0.0001;
+  const tickSize = Math.pow(10, Math.floor(Math.log10(rawTick)));
+  const invTick = Math.round(1 / tickSize);
+
   const map = new Map<number, number>();
   for (const [price, qty] of levels) {
     if (price <= 0 || qty <= 0) continue;
-    const key = Math.round(price * 100) / 100;
+    // Use integer key to avoid floating-point Map-key issues
+    const key = Math.round(price * invTick);
     map.set(key, (map.get(key) ?? 0) + qty);
   }
-  const merged = [...map.entries()].map(([p, q]) => [p, q] as [number, number]);
+
+  const merged = [...map.entries()].map(([k, q]) => [k / invTick, q] as [number, number]);
   merged.sort((a, b) => direction === 'desc' ? b[0] - a[0] : a[0] - b[0]);
   return merged;
 }

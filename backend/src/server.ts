@@ -18,6 +18,7 @@ import type { IUnifiedLiquidation } from './interfaces/IUnifiedLiquidation.js';
 import type { IUnifiedOpenInterest } from './interfaces/IUnifiedOpenInterest.js';
 import { fetchMrData } from './services/MrService.js';
 import { getRecentLiquidations } from './db/LiquidationDB.js';
+import { fetchCoinInfo } from './services/CoinInfoService.js';
 
 // ── Topic Constants ──────────────────────────────────────────────────────────
 const TOPIC_LOB          = 'lob';
@@ -180,6 +181,34 @@ export function startServer(options: ServerOptions): Promise<ServerHandle> {
       const rows = getRecentLiquidations(symbol, limit);
       res.end(JSON.stringify(rows));
     });
+  });
+
+  // ── Coin Info (CoinGecko) REST endpoint ─────────────────────────────────────
+  app.get('/api/coin-info', (res, req) => {
+    const symbol = (req.getQuery('symbol') || getCurrentSymbol()).toUpperCase();
+
+    let aborted = false;
+    res.onAborted(() => { aborted = true; });
+
+    fetchCoinInfo(symbol)
+      .then((result) => {
+        if (aborted) return;
+        res.cork(() => {
+          applyCors(res);
+          res.writeHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(result));
+        });
+      })
+      .catch((err) => {
+        if (aborted) return;
+        log.error('CoinInfo fetch error', err instanceof Error ? err : new Error(String(err)));
+        res.cork(() => {
+          applyCors(res);
+          res.writeStatus('500 Internal Server Error');
+          res.writeHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        });
+      });
   });
 
   // ── CORS preflight handler ────────────────────────────────────────────────

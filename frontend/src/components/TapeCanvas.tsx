@@ -36,8 +36,12 @@ function fmtTime(ts: number): string {
 function fmtPrice(price: number): string {
   if (price >= 10_000)  return price.toFixed(1);
   if (price >= 100)     return price.toFixed(2);
-  if (price >= 1)       return price.toFixed(3);
-  return price.toFixed(4);
+  if (price >= 1)       return price.toFixed(4);
+  if (price <= 0) return '0';
+  // Küçük sayılar: baştaki sıfırlardan sonra 4 anlamlı basamak göster
+  const e = Math.floor(Math.log10(price));
+  const decimals = Math.max(4, -e + 3);
+  return price.toFixed(decimals);
 }
 
 function fmtQty(qty: number): string {

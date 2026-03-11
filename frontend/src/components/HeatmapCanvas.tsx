@@ -52,12 +52,15 @@ function formatQty(qty: number): string {
   return qty.toFixed(6);
 }
 
-/** Fiyatı anlamlı ondalıklı göster */
+/** Fiyatı anlamlı ondalıklı göster — düşük fiyatlı coinler için dinamik hassasiyet */
 function formatPrice(price: number): string {
   if (price >= 10_000)  return price.toFixed(1);
   if (price >= 100)     return price.toFixed(2);
   if (price >= 1)       return price.toFixed(3);
-  return price.toFixed(4);
+  if (price <= 0)       return '0';
+  // Sub-$1: show enough decimals for 4 significant digits
+  const leadingZeros = -Math.floor(Math.log10(price));   // e.g. 0.016 → 1
+  return price.toFixed(leadingZeros + 4);                 // 0.016427 → 5 decimals → "0.01643"
 }
 
 // ── Çizim Motoru ────────────────────────────────────────────────────────────
@@ -109,7 +112,10 @@ function drawFrame(
   // ── Asks çiz (yukarıdan aşağı — en uzak ask'tan en yakın ask'a) ───────
   // visibleAsks[0] = best ask (en düşük fiyat) — ekranın ortasına en yakın olmalı
   // Bu yüzden ters sırada çiziyoruz: en uzak ask en üstte
-  const priceColWidth = 90;            // fiyat sütunu genişliği (sol taraf)
+
+  // Fiyat sütunu genişliğini referans fiyata göre hesapla
+  const sampleText = formatPrice(book.midPrice);
+  const priceColWidth = Math.max(70, sampleText.length * 7 + 16);
   const qtyColWidth   = 70;            // miktar sütunu genişliği (sağ taraf)
   const barMaxWidth   = width - priceColWidth - qtyColWidth - 4; // bar için kullanılabilir alan
 

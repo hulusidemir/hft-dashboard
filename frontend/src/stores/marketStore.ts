@@ -108,7 +108,7 @@ export interface MarketState {
   isAlarmEnabled: boolean;
 
   // ── View State ────────────────────────────────────────────────────────
-  activeView: 'dashboard' | 'radar' | 'mr';
+  activeView: 'dashboard' | 'radar' | 'mr' | 'exchanges';
 
   // ── War Log (Savaş Günlüğü) ────────────────────────────────────────
   warLog: WarLogEntry[];
@@ -176,7 +176,7 @@ export function toggleAlarm(): void {
 }
 
 // ── View Toggle ──────────────────────────────────────────────────────────
-export function setActiveView(view: 'dashboard' | 'radar' | 'mr'): void {
+export function setActiveView(view: 'dashboard' | 'radar' | 'mr' | 'exchanges'): void {
   marketStore.setState({ activeView: view });
 }
 
@@ -335,9 +335,12 @@ function handleWarLog(data: unknown): void {
   const entry = data as Omit<WarLogEntry, 'id'>;
   pushWarLog(entry);
 
+  // Global alarmlar sadece RADAR sayfasında duyulsun
+  const state = marketStore.getState();
+  if (!state.isAlarmEnabled || !audioManager.ready || state.activeView !== 'radar') return;
+
   // Global tasfiye alarm — ses tetikle
   if (
-    marketStore.getState().isAlarmEnabled && audioManager.ready &&
     (entry.type === 'LIQ_LONG' || entry.type === 'LIQ_SHORT') &&
     entry.quoteQty >= 50_000
   ) {
@@ -345,7 +348,6 @@ function handleWarLog(data: unknown): void {
   }
   // Global whale alarm — ses tetikle
   if (
-    marketStore.getState().isAlarmEnabled && audioManager.ready &&
     (entry.type === 'WHALE_BUY' || entry.type === 'WHALE_SELL') &&
     entry.quoteQty >= 100_000
   ) {
