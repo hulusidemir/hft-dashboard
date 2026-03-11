@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useMarketStore, setActiveView } from '../stores/marketStore';
+import { t, useLang, getLocale } from '../utils/i18n';
 
 const REST_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:9000';
 
@@ -117,9 +118,38 @@ interface CoinInfo {
   website: string;
   spotExchanges: string[];
   perpExchanges: string[];
+  // Price milestones
+  currentPrice: number;
+  athPrice: number | null;
+  athDate: string | null;
+  athChangePercentage: number | null;
+  atlPrice: number | null;
+  atlDate: string | null;
+  atlChangePercentage: number | null;
+  launchPrice: number | null;
+  launchChangePercentage: number | null;
+}
+
+// ── Haber tipi ───────────────────────────────────────────────────────────────
+interface NewsItem {
+  title: string;
+  titleOriginal: string;
+  source: string;
+  url: string;
+  publishedAt: string;
+  importance: 'critical' | 'high' | 'medium' | 'low';
+  currency: string;
+}
+
+interface NewsResult {
+  symbol: string;
+  news: NewsItem[];
+  fetchedAt: number;
+  source: string;
 }
 
 export default function CoinMRPanel() {
+  useLang(); // re-render on language change
   const currentSymbol = useMarketStore((s) => s.currentSymbol);
   const [timeframe, setTimeframe] = useState<Timeframe>('1h');
   const [data, setData] = useState<MrResult | null>(null);
@@ -129,6 +159,8 @@ export default function CoinMRPanel() {
   const depthCanvasRef = useRef<HTMLCanvasElement>(null);
   const [coinInfo, setCoinInfo] = useState<CoinInfo | null>(null);
   const [infoExpanded, setInfoExpanded] = useState(false);
+  const [newsData, setNewsData] = useState<NewsResult | null>(null);
+  const [newsLoading, setNewsLoading] = useState(false);
 
   // ── 1s tick for funding countdown ───────────────────────────────────────
   useEffect(() => {
@@ -165,6 +197,21 @@ export default function CoinMRPanel() {
       .then((r) => r.ok ? r.json() as Promise<CoinInfo> : null)
       .then((info) => { if (!cancelled && info) setCoinInfo(info); })
       .catch(() => {});
+    return () => { cancelled = true; };
+  }, [currentSymbol]);
+
+  // ── News fetch ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    setNewsData(null);
+    setNewsLoading(true);
+    let cancelled = false;
+    fetch(`${REST_BASE}/api/news?symbol=${currentSymbol}`)
+      .then((r) => r.ok ? r.json() as Promise<NewsResult> : null)
+      .then((result) => {
+        if (!cancelled && result) setNewsData(result);
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setNewsLoading(false); });
     return () => { cancelled = true; };
   }, [currentSymbol]);
 
@@ -253,13 +300,13 @@ export default function CoinMRPanel() {
       {/* ═══════════ LOADING / ERROR ════════════════════════════════════ */}
       {loading && !data && (
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, color: '#ff9900' }}>
-          <span style={{ animation: 'blink 0.8s infinite' }}>⟳ Veriler çekiliyor...</span>
+          <span style={{ animation: 'blink 0.8s infinite' }}>{t('loadingData')}</span>
         </div>
       )}
 
       {error && (
         <div style={{ padding: 20, color: '#ff4444', textAlign: 'center', fontSize: 13 }}>
-          ⚠ Hata: {error}
+          {t('error')}{error}
         </div>
       )}
 
@@ -304,7 +351,7 @@ export default function CoinMRPanel() {
                       return (
                         <span
                           key={ex}
-                          title={listed ? `${ex} ${label}` : `${ex} ${label} yok`}
+                          title={listed ? `${ex} ${label}` : t('noExListing', { ex, label })}
                           style={{
                             fontSize: 8,
                             fontWeight: 700,
@@ -420,6 +467,144 @@ export default function CoinMRPanel() {
                 );
               })()}
 
+              {/* ── Fiyat Kilometre Taşları: Lansman / ATH / ATL ─────── */}
+              {(coinInfo.athPrice != null || coinInfo.atlPrice != null || coinInfo.launchPrice != null) && (
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                  gap: 8,
+                }}>
+                  {/* LAUNCH */}
+                  {coinInfo.genesisDate && (
+                    <div style={{
+                      background: '#0d1117',
+                      border: '1px solid #1a2a3a',
+                      borderLeft: '3px solid #00bfff',
+                      borderRadius: 8,
+                      padding: '10px 14px',
+                    }}>
+                      <div style={{ fontSize: 9, fontWeight: 800, color: '#00bfff', letterSpacing: 1, marginBottom: 6 }}>
+                        🚀 {t('launchInfo')}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 9, color: '#666' }}>{t('launchDate')}</span>
+                          <span style={{ fontSize: 10, color: '#ccc', fontWeight: 700 }}>
+                            {new Date(coinInfo.genesisDate).toLocaleDateString(getLocale(), { day: '2-digit', month: 'short', year: 'numeric' })}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 9, color: '#666' }}>{t('launchPrice')}</span>
+                          <span style={{ fontSize: 10, color: '#ccc', fontWeight: 700 }}>
+                            {coinInfo.launchPrice != null
+                              ? `$${coinInfo.launchPrice < 1 ? coinInfo.launchPrice.toPrecision(4) : coinInfo.launchPrice.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+                              : t('noData')}
+                          </span>
+                        </div>
+                        {coinInfo.launchChangePercentage != null && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: 9, color: '#666' }}>{t('launchDistance')}</span>
+                            <span style={{
+                              fontSize: 11,
+                              fontWeight: 900,
+                              color: coinInfo.launchChangePercentage >= 0 ? '#50ff50' : '#ff5050',
+                            }}>
+                              {coinInfo.launchChangePercentage >= 0 ? '+' : ''}{coinInfo.launchChangePercentage.toFixed(1)}%
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ATH */}
+                  {coinInfo.athPrice != null && (
+                    <div style={{
+                      background: '#0d1117',
+                      border: '1px solid #1a3a1a',
+                      borderLeft: '3px solid #50ff50',
+                      borderRadius: 8,
+                      padding: '10px 14px',
+                    }}>
+                      <div style={{ fontSize: 9, fontWeight: 800, color: '#50ff50', letterSpacing: 1, marginBottom: 6 }}>
+                        👑 {t('athInfo')}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 9, color: '#666' }}>{t('athDate')}</span>
+                          <span style={{ fontSize: 10, color: '#ccc', fontWeight: 700 }}>
+                            {coinInfo.athDate
+                              ? new Date(coinInfo.athDate).toLocaleDateString(getLocale(), { day: '2-digit', month: 'short', year: 'numeric' })
+                              : t('noData')}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 9, color: '#666' }}>ATH</span>
+                          <span style={{ fontSize: 12, color: '#50ff50', fontWeight: 900 }}>
+                            ${coinInfo.athPrice < 1 ? coinInfo.athPrice.toPrecision(4) : coinInfo.athPrice.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                        {coinInfo.athChangePercentage != null && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: 9, color: '#666' }}>{t('athDistance')}</span>
+                            <span style={{
+                              fontSize: 11,
+                              fontWeight: 900,
+                              color: '#ff5050',
+                            }}>
+                              {coinInfo.athChangePercentage.toFixed(1)}%
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ATL */}
+                  {coinInfo.atlPrice != null && (
+                    <div style={{
+                      background: '#0d1117',
+                      border: '1px solid #3a1a1a',
+                      borderLeft: '3px solid #ff5050',
+                      borderRadius: 8,
+                      padding: '10px 14px',
+                    }}>
+                      <div style={{ fontSize: 9, fontWeight: 800, color: '#ff5050', letterSpacing: 1, marginBottom: 6 }}>
+                        📉 {t('atlInfo')}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 9, color: '#666' }}>{t('atlDate')}</span>
+                          <span style={{ fontSize: 10, color: '#ccc', fontWeight: 700 }}>
+                            {coinInfo.atlDate
+                              ? new Date(coinInfo.atlDate).toLocaleDateString(getLocale(), { day: '2-digit', month: 'short', year: 'numeric' })
+                              : t('noData')}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 9, color: '#666' }}>ATL</span>
+                          <span style={{ fontSize: 12, color: '#ff5050', fontWeight: 900 }}>
+                            ${coinInfo.atlPrice < 1 ? coinInfo.atlPrice.toPrecision(4) : coinInfo.atlPrice.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                        {coinInfo.atlChangePercentage != null && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: 9, color: '#666' }}>{t('atlDistance')}</span>
+                            <span style={{
+                              fontSize: 11,
+                              fontWeight: 900,
+                              color: '#50ff50',
+                            }}>
+                              +{coinInfo.atlChangePercentage.toFixed(1)}%
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Açıklama — collapse/expand */}
               {(coinInfo.descriptionTr || coinInfo.descriptionEn) && (
                 <div>
@@ -436,7 +621,7 @@ export default function CoinMRPanel() {
                       marginBottom: infoExpanded ? 6 : 0,
                     }}
                   >
-                    {infoExpanded ? '▼ Açıklamayı gizle' : '▶ Açıklamayı göster'}
+                    {infoExpanded ? t('hideDesc') : t('showDesc')}
                   </button>
                   {infoExpanded && (
                     <div
@@ -466,7 +651,7 @@ export default function CoinMRPanel() {
             marginBottom: 24,
           }}>
             <SummaryCard
-              label="Net CVD (Para Girişi)"
+              label={t('netCvdInflow')}
               value={fmtUsd(data.aggregated.totalNetCvd)}
               color={data.aggregated.totalNetCvd >= 0 ? '#50ff50' : '#ff5050'}
               large
@@ -496,17 +681,9 @@ export default function CoinMRPanel() {
               color={data.aggregated.combinedLongShortRatio >= 1 ? '#50ff50' : '#ff5050'}
               large
             />
-            <SummaryCard
-              label="Liquidated Longs"
-              value={fmtUsd(data.aggregated.totalLiqLongUsd)}
-              color="#ff5050"
-              large
-            />
-            <SummaryCard
-              label="Liquidated Shorts"
-              value={fmtUsd(data.aggregated.totalLiqShortUsd)}
-              color="#50ff50"
-              large
+            <LiquidationTotalCard
+              totalLong={data.aggregated.totalLiqLongUsd}
+              totalShort={data.aggregated.totalLiqShortUsd}
             />
           </div>
 
@@ -538,6 +715,36 @@ export default function CoinMRPanel() {
             />
           </div>
 
+          {/* ═══════════ HABER BÖLÜMü — SON 1 AY ═══════════════════════ */}
+          <SectionTitle text={t('newsTitle', { coin: baseCoin })} />
+          <div style={{
+            background: '#0a0a12',
+            border: '1px solid #1a1a2e',
+            borderRadius: 8,
+            padding: 12,
+            marginBottom: 24,
+            maxHeight: 500,
+            overflow: 'auto',
+          }}>
+            {newsLoading && !newsData && (
+              <div style={{ textAlign: 'center', color: '#ff9900', fontSize: 12, padding: 20 }}>
+                {t('loadingNews')}
+              </div>
+            )}
+            {!newsLoading && (!newsData || newsData.news.length === 0) && (
+              <div style={{ textAlign: 'center', color: '#555', fontSize: 11, padding: 20 }}>
+                {t('noNewsFound', { coin: baseCoin })}
+              </div>
+            )}
+            {newsData && newsData.news.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {newsData.news.map((item, i) => (
+                  <NewsRow key={i} item={item} />
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* ═══════════ DASHBOARD'A DÖNÜŞ BUTONU ═══════════════════════ */}
           <button
             onClick={() => setActiveView('dashboard')}
@@ -566,7 +773,7 @@ export default function CoinMRPanel() {
               e.currentTarget.style.boxShadow = '0 4px 24px rgba(255,140,0,0.3)';
             }}
           >
-            İSTİHBARAT TAMAM — OPERASYONA (DASHBOARD) GEÇ
+            {t('backToDashboard')}
           </button>
         </div>
       )}
@@ -635,6 +842,72 @@ function SummaryCard({ label, value, color, sub, subColor, large }: {
   );
 }
 
+function LiquidationTotalCard({ totalLong, totalShort }: {
+  totalLong: number;
+  totalShort: number;
+}) {
+  const total = totalLong + totalShort;
+  const dominant = totalLong >= totalShort ? 'long' : 'short';
+  const totalColor = dominant === 'long' ? '#ff5050' : '#50ff50';
+
+  return (
+    <div style={{
+      background: '#0a0a14',
+      border: '1px solid #1a1a2e',
+      borderRadius: 8,
+      padding: '16px 18px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6,
+    }}>
+      <div style={{ fontSize: 9, color: '#666', letterSpacing: 1, textTransform: 'uppercase' }}>
+        TOTAL LIQUIDATIONS
+      </div>
+      <div style={{
+        fontSize: 26,
+        fontWeight: 900,
+        color: totalColor,
+        letterSpacing: 1,
+      }}>
+        {fmtUsd(total)}
+      </div>
+      <div style={{
+        display: 'flex',
+        gap: 12,
+        marginTop: 2,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ fontSize: 9, color: '#ff5050', fontWeight: 700 }}>LONG</span>
+          <span style={{ fontSize: 12, color: '#ff5050', fontWeight: 800 }}>{fmtUsd(totalLong)}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ fontSize: 9, color: '#50ff50', fontWeight: 700 }}>SHORT</span>
+          <span style={{ fontSize: 12, color: '#50ff50', fontWeight: 800 }}>{fmtUsd(totalShort)}</span>
+        </div>
+      </div>
+      {/* Mini bar showing ratio */}
+      <div style={{
+        height: 4,
+        borderRadius: 2,
+        background: '#151520',
+        overflow: 'hidden',
+        display: 'flex',
+      }}>
+        <div style={{
+          width: total > 0 ? `${(totalLong / total * 100).toFixed(1)}%` : '50%',
+          background: '#ff5050',
+          borderRadius: '2px 0 0 2px',
+        }} />
+        <div style={{
+          flex: 1,
+          background: '#50ff50',
+          borderRadius: '0 2px 2px 0',
+        }} />
+      </div>
+    </div>
+  );
+}
+
 function ExchangeColumn({ label, data, color, now }: {
   label: string;
   data: ExchangeMrData;
@@ -693,7 +966,7 @@ function ExchangeColumn({ label, data, color, now }: {
       />
       {data.liqEstimated && (
         <div style={{ fontSize: 8, color: '#555', textAlign: 'right', marginTop: 2 }}>
-          OI ağırlıklı tahmin (API yok)
+          {t('oiEstimated')}
         </div>
       )}
     </div>
@@ -960,4 +1233,106 @@ function drawDepthChart(
     const y = 20 + (chartH / 4) * i;
     ctx.fillText(fmt(v), PAD_L - 4, y + 3);
   }
+}
+
+// ── Importance Badge ─────────────────────────────────────────────────────────
+const IMPORTANCE_STYLES: Record<string, { bg: string; fg: string; labelKey: string }> = {
+  critical: { bg: '#ff000025', fg: '#ff4444', labelKey: 'critical' },
+  high:     { bg: '#ff990025', fg: '#ff9900', labelKey: 'high' },
+  medium:   { bg: '#00bfff20', fg: '#00bfff', labelKey: 'medium' },
+  low:      { bg: '#88888815', fg: '#888',    labelKey: 'low' },
+};
+
+function ImportanceBadge({ importance }: { importance: string }) {
+  const style = IMPORTANCE_STYLES[importance] ?? IMPORTANCE_STYLES['low']!;
+  return (
+    <span style={{
+      display: 'inline-block',
+      padding: '2px 8px',
+      borderRadius: 4,
+      background: style.bg,
+      color: style.fg,
+      fontSize: 8,
+      fontWeight: 800,
+      letterSpacing: 0.8,
+      border: `1px solid ${style.fg}33`,
+      whiteSpace: 'nowrap',
+    }}>
+      {t(style.labelKey)}
+    </span>
+  );
+}
+
+// ── NewsRow ──────────────────────────────────────────────────────────────────
+function NewsRow({ item }: { item: NewsItem }) {
+  const date = new Date(item.publishedAt);
+  const dateStr = `${date.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' })} ${date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}`;
+  const hasTranslation = item.title !== item.titleOriginal;
+
+  return (
+    <a
+      href={item.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        padding: '10px 14px',
+        background: '#0c0c18',
+        border: '1px solid #1a1a2e',
+        borderRadius: 6,
+        textDecoration: 'none',
+        cursor: 'pointer',
+        transition: 'border-color 0.15s, background 0.15s',
+      }}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLAnchorElement).style.borderColor = '#ff990066';
+        (e.currentTarget as HTMLAnchorElement).style.background = '#0e0e1e';
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLAnchorElement).style.borderColor = '#1a1a2e';
+        (e.currentTarget as HTMLAnchorElement).style.background = '#0c0c18';
+      }}
+    >
+      {/* Üst satır: importance + source + tarih */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <ImportanceBadge importance={item.importance} />
+        <span style={{
+          fontSize: 9,
+          fontWeight: 700,
+          color: '#666',
+          padding: '1px 6px',
+          background: '#151520',
+          borderRadius: 3,
+          border: '1px solid #222',
+        }}>
+          {item.source}
+        </span>
+        <span style={{ fontSize: 9, color: '#555', marginLeft: 'auto' }}>
+          {dateStr}
+        </span>
+      </div>
+      {/* Başlık (çevrilmiş) */}
+      <div style={{
+        fontSize: 12,
+        fontWeight: 600,
+        color: '#ddd',
+        lineHeight: '1.5',
+      }}>
+        {item.title}
+      </div>
+      {/* Orijinal başlık (çeviri varsa) */}
+      {hasTranslation && (
+        <div style={{
+          fontSize: 10,
+          color: '#555',
+          fontStyle: 'italic',
+          lineHeight: '1.4',
+        }}>
+          {item.titleOriginal}
+        </div>
+      )}
+    </a>
+  );
 }

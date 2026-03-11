@@ -17,6 +17,7 @@ import type {
 } from 'lightweight-charts';
 import { marketStore, useMarketStore, getTrades } from '../stores/marketStore';
 import type { UnifiedTrade } from '../stores/marketStore';
+import { t, useLang } from '../utils/i18n';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const CANDLE_INTERVAL_S = 1;
@@ -628,6 +629,7 @@ function ExchangeTape({ exchange }: { exchange: ExchangeName }) {
 
 // ── Main Panel ──────────────────────────────────────────────────────────────
 export default function ExchangesPanel() {
+  useLang(); // re-render on language change
   const currentSymbol = useMarketStore((s) => s.currentSymbol);
   const baseCoin = currentSymbol.replace(/USDT$/i, '');
   const [fundingMap, setFundingMap] = useState<FundingMap>({ binance: null, bybit: null, okx: null });
@@ -697,7 +699,7 @@ export default function ExchangesPanel() {
         flexShrink: 0,
         gap: 8,
       }}>
-        <span style={{ color: '#ff9900' }}>BORSALAR</span>
+        <span style={{ color: '#ff9900' }}>{t('exchangesTitle')}</span>
         <span style={{ color: '#555' }}>·</span>
         <span>{baseCoin}/USDT</span>
         <span style={{ color: '#555' }}>·</span>

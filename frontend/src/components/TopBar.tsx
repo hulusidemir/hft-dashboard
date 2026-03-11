@@ -7,6 +7,8 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useMarketStore, changeSymbol, toggleAlarm, setActiveView } from '../stores/marketStore';
 import { audioManager } from '../utils/audioManager';
+import { t, useLang, setLang } from '../utils/i18n';
+import type { Lang } from '../utils/i18n';
 
 // ── Sabitler ─────────────────────────────────────────────────────────────────
 const MAX_VISIBLE_ITEMS = 12;
@@ -90,6 +92,7 @@ export default function TopBar() {
 
   // Sembol adından base coin'i çıkar (BTCUSDT → BTC)
   const baseCoin = currentSymbol.replace(/USDT$/i, '');
+  const lang = useLang();
 
   // ── Alarm Toggle Handler ────────────────────────────────────────────────
   const handleAlarmToggle = useCallback(() => {
@@ -176,7 +179,26 @@ export default function TopBar() {
           transition: 'all 0.15s',
         }}
       >
-        BORSALAR
+        {t('exchanges')}
+      </button>
+      <button
+        onClick={() => setActiveView('overview')}
+        style={{
+          background: activeView === 'overview' ? '#1a0f00' : 'transparent',
+          border: `1px solid ${activeView === 'overview' ? '#ff9900' : '#333'}`,
+          borderRadius: 3,
+          padding: '2px 8px',
+          height: 20,
+          cursor: 'pointer',
+          fontFamily: 'monospace',
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: 1,
+          color: activeView === 'overview' ? '#ff9900' : '#555',
+          transition: 'all 0.15s',
+        }}
+      >
+        OVERVIEW
       </button>
     </div>
     <div ref={containerRef} style={{ position: 'relative', userSelect: 'none' }}>
@@ -372,6 +394,32 @@ export default function TopBar() {
     >
       {isAlarmEnabled ? '🔔 ALARM: ON' : '🔕 ALARM: OFF'}
     </button>
+
+    {/* ── Language Toggle ──────────────────────────────────────────── */}
+    <div style={{ display: 'flex', gap: 0, marginLeft: 4 }}>
+      {(['tr', 'en'] as Lang[]).map((l) => (
+        <button
+          key={l}
+          onClick={() => setLang(l)}
+          style={{
+            background: lang === l ? '#1a0f00' : '#111',
+            border: `1px solid ${lang === l ? '#ff9900' : '#333'}`,
+            borderRadius: l === 'tr' ? '4px 0 0 4px' : '0 4px 4px 0',
+            padding: '2px 8px',
+            height: 22,
+            cursor: 'pointer',
+            fontFamily: 'monospace',
+            fontSize: 10,
+            fontWeight: 700,
+            color: lang === l ? '#ff9900' : '#555',
+            transition: 'all 0.15s',
+            letterSpacing: 0.5,
+          }}
+        >
+          {l === 'tr' ? '🇹🇷 TR' : '🇬🇧 EN'}
+        </button>
+      ))}
+    </div>
     </div>
   );
 }

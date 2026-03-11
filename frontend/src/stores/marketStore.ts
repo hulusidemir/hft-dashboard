@@ -108,7 +108,7 @@ export interface MarketState {
   isAlarmEnabled: boolean;
 
   // ── View State ────────────────────────────────────────────────────────
-  activeView: 'dashboard' | 'radar' | 'mr' | 'exchanges';
+  activeView: 'dashboard' | 'radar' | 'mr' | 'exchanges' | 'overview';
 
   // ── War Log (Savaş Günlüğü) ────────────────────────────────────────
   warLog: WarLogEntry[];
@@ -176,7 +176,7 @@ export function toggleAlarm(): void {
 }
 
 // ── View Toggle ──────────────────────────────────────────────────────────
-export function setActiveView(view: 'dashboard' | 'radar' | 'mr' | 'exchanges'): void {
+export function setActiveView(view: 'dashboard' | 'radar' | 'mr' | 'exchanges' | 'overview'): void {
   marketStore.setState({ activeView: view });
 }
 
@@ -280,8 +280,8 @@ function handleLiquidation(data: unknown): void {
 
   marketStore.setState({ liquidations: updated, lastMessageAt: Date.now() });
 
-  // ── Liquidation Alarm — $50K+ tasfiye sesi ────────────────────────────
-  if (marketStore.getState().isAlarmEnabled && audioManager.ready && liq.quoteQty >= 50_000) {
+  // ── Liquidation Alarm — $10K+ tasfiye sesi ────────────────────
+  if (marketStore.getState().isAlarmEnabled && audioManager.ready && liq.quoteQty >= 10_000) {
     audioManager.playLiquidation();
   }
   // War Log artık global stream'den (war_log topic) geliyor — burada push YAPILMAZ
@@ -342,7 +342,7 @@ function handleWarLog(data: unknown): void {
   // Global tasfiye alarm — ses tetikle
   if (
     (entry.type === 'LIQ_LONG' || entry.type === 'LIQ_SHORT') &&
-    entry.quoteQty >= 50_000
+    entry.quoteQty >= 10_000
   ) {
     audioManager.playLiquidation();
   }

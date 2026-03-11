@@ -8,6 +8,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useMarketStore, changeSymbol, setActiveView } from '../stores/marketStore';
 import type { WarLogEntry } from '../stores/marketStore';
+import { t, useLang } from '../utils/i18n';
 
 // ── Types — Backend RadarService mirror ──────────────────────────────────────
 interface RadarTicker {
@@ -220,6 +221,7 @@ function WarLogRow({ entry }: { entry: WarLogEntry }) {
 // ── RadarPanel ────────────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function RadarPanel() {
+  useLang(); // re-render on language change
   const [hotTargets, setHotTargets] = useState<HotTargets | null>(null);
   const [lastUpdate, setLastUpdate] = useState<number>(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -317,7 +319,7 @@ export default function RadarPanel() {
             <TickerTable tickers={hotTargets.topVolume} />
           ) : (
             <div style={{ ...MONO, padding: 12, color: '#444', textAlign: 'center' }}>
-              Tarama bekleniyor...
+              {t('scanWaiting')}
             </div>
           )}
 
@@ -374,9 +376,9 @@ export default function RadarPanel() {
               textAlign: 'center',
               fontSize: 10,
             }}>
-              Henüz $100K+ whale veya $50K+ tasfiye tespit edilmedi.
+              {t('noWhaleYet')}
               <br />
-              Alarm tetiklendiğinde burada kayıt oluşacak.
+              {t('alarmWillAppear')}
             </div>
           ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>

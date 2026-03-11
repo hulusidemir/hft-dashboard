@@ -1,9 +1,10 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import type { IChartApi } from 'lightweight-charts';
 import { startMarketConnection, stopMarketConnection, useMarketStore } from './stores/marketStore';
 import { syncMultipleCharts } from './utils/chartSync';
 import HeatmapCanvas from './components/HeatmapCanvas';
 import ChartPanel from './components/ChartPanel';
+import type { ChartTimeframe } from './components/ChartPanel';
 import CVDChart from './components/CVDChart';
 import OIChart from './components/OIChart';
 import TapeCanvas from './components/TapeCanvas';
@@ -12,6 +13,7 @@ import SystemMonitor from './components/SystemMonitor';
 import RadarPanel from './components/RadarPanel';
 import CoinMRPanel from './components/CoinMRPanel';
 import ExchangesPanel from './components/ExchangesPanel';
+import OverviewPanel from './components/OverviewPanel';
 import TopBar from './components/TopBar';
 
 // ── Status Bar (düşük frekanslı — React re-render güvenli) ──────────────────
@@ -113,6 +115,7 @@ function PanelLabel({ text }: { text: string }) {
 function App() {
   const currentSymbol = useMarketStore((s) => s.currentSymbol);
   const activeView    = useMarketStore((s) => s.activeView);
+  const [timeframe, setTimeframe] = useState<ChartTimeframe>('RT');
 
   const priceChartRef = useRef<IChartApi | null>(null);
   const cvdChartRef   = useRef<IChartApi | null>(null);
@@ -185,6 +188,12 @@ function App() {
           <ExchangesPanel />
         </div>
       )}
+      {/* ── OVERVIEW View ──────────────────────────────────────────────────── */}
+      {activeView === 'overview' && (
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <OverviewPanel />
+        </div>
+      )}
       {/* ── Main Grid: 3 sütun (display:none ile gizle — WS kopmaz) ── */}
       <div style={{
         flex: 1,
@@ -230,9 +239,9 @@ function App() {
           overflow: 'hidden',
         }}>
           {/* Candlestick — %60 yükseklik */}
-          <PanelLabel text="Price · Line 1s" />
+          <PanelLabel text="Price · Multi-TF" />
           <div style={{ flex: 6, minHeight: 0 }}>
-            <ChartPanel key={currentSymbol} onChartReady={onPriceChartReady} />
+            <ChartPanel key={currentSymbol} onChartReady={onPriceChartReady} timeframe={timeframe} onTimeframeChange={setTimeframe} />
           </div>
 
           {/* CVD — %20 yükseklik */}
@@ -240,7 +249,7 @@ function App() {
             <PanelLabel text="CVD · Cumulative Volume Delta" />
           </div>
           <div style={{ flex: 2, minHeight: 0 }}>
-            <CVDChart key={currentSymbol} onChartReady={onCVDChartReady} />
+            <CVDChart key={currentSymbol} onChartReady={onCVDChartReady} timeframe={timeframe} />
           </div>
 
           {/* OI — %20 yükseklik */}
@@ -248,7 +257,7 @@ function App() {
             <PanelLabel text="OI · Open Interest" />
           </div>
           <div style={{ flex: 2, minHeight: 0 }}>
-            <OIChart key={currentSymbol} onChartReady={onOIChartReady} />
+            <OIChart key={currentSymbol} onChartReady={onOIChartReady} timeframe={timeframe} />
           </div>
         </div>
 
