@@ -23,16 +23,16 @@ A professional-grade, high-frequency crypto market dashboard built for scalpers 
 
 | Feature | Description |
 |---------|-------------|
-| **Live Order Book Heatmap** | Canvas-rendered LOB heatmap with color-coded depth visualization |
-| **Trade Tape** | Real-time trade flow with whale detection ($100K+ highlights) |
+| **Live Order Book Heatmap** | Canvas-rendered LOB heatmap with grouping modes (RT/Short/Mid/Long) |
+| **Trade Tape** | Real-time trade flow with whale detection ($100K+) and minimum USD filter |
 | **Liquidation Feed** | Live margin liquidation waterfall across all 3 exchanges |
-| **Price Charts** | Real-time line chart + historical OHLC candlesticks (5m/15m/1h/4h) |
+| **Price Charts** | Real-time line chart + historical OHLC candlesticks (5m/15m/1h/4h) with scroll-to-latest |
 | **CVD Chart** | Cumulative Volume Delta — buyer vs seller pressure momentum |
 | **OI Monitor** | Open Interest net flow with baseline visualization |
 | **Radar Panel** | Global market scanner — whale trades + large liquidations war log |
-| **Coin MR (Market Recon)** | Pre-trade intelligence: OI, funding, L/S ratio, CVD, depth chart, news |
+| **Coin MR (Market Recon)** | Pre-trade intelligence: OI, funding, L/S ratio, CVD, depth chart, news + Exchange Breakdown table |
 | **Market Overview** | 4-timeframe directional bias analysis with signal scoring system |
-| **Exchange Comparison** | Side-by-side price charts from Binance, Bybit, OKX |
+| **Exchange Comparison** | Side-by-side charts (Binance/Bybit/OKX) with shared timeframe selector (RT/5m/15m/1h/4h) and per-exchange klines |
 | **Multi-language** | Turkish + English UI with one-click toggle |
 
 ## Architecture
@@ -171,32 +171,30 @@ hft-dashboard/
 git clone <repo-url> hft-dashboard
 cd hft-dashboard
 
-# Install backend dependencies
-cd backend && npm install
+# Install all dependencies at once (root)
+npm run install:all
 
-# Install frontend dependencies
-cd ../frontend && npm install
+# Or manually:
+# cd backend && npm install
+# cd ../frontend && npm install
 ```
 
-### 2) Start Backend
+### 2) Start Both Servers (Recommended)
 
 ```bash
-cd backend
+# From root — starts backend + frontend concurrently
 npm run dev
 ```
 
-The backend starts on port **9000** by default. It immediately connects to Binance, Bybit, and OKX WebSocket feeds.
-
-### 3) Start Frontend
-
-In a new terminal:
+### 3) (Alternative) Start Separately
 
 ```bash
-cd frontend
-npm run dev
-```
+# Backend
+cd backend && npm run dev
 
-Vite dev server starts on **http://localhost:5173** (default).
+# Frontend (new terminal)
+cd frontend && npm run dev
+```
 
 ### 4) Open Dashboard
 
@@ -231,6 +229,17 @@ VITE_BACKEND_URL=http://192.168.1.100:9000
 
 ## Scripts
 
+### Root (`/`)
+
+| Script | Command | Description |
+|--------|---------|-------------|
+| `dev` | `npm run dev` | Start backend + frontend concurrently |
+| `dev:backend` | `npm run dev:backend` | Backend only |
+| `dev:frontend` | `npm run dev:frontend` | Frontend only |
+| `build` | `npm run build` | Build both backend and frontend |
+| `install:all` | `npm run install:all` | Install all dependencies |
+| `typecheck` | `npm run typecheck` | Type-check both projects |
+
 ### Backend (`backend/`)
 
 | Script | Command | Description |
@@ -259,7 +268,7 @@ All REST endpoints are served from the backend on the configured port.
 | `/api/news?symbol=BTCUSDT` | GET | Coin news (CryptoCompare + CryptoPanic) |
 | `/api/coin-info?symbol=BTCUSDT` | GET | Coin metadata from CoinGecko |
 | `/api/overview?symbol=BTCUSDT` | GET | 4-timeframe market overview analysis |
-| `/api/klines?symbol=BTCUSDT&interval=1h&limit=300` | GET | Historical OHLCV klines |
+| `/api/klines?symbol=BTCUSDT&interval=1h&limit=300&exchange=binance` | GET | Historical OHLCV klines (exchange: binance\|bybit\|okx) |
 | `/api/oi-history?symbol=BTCUSDT&interval=1h&limit=300` | GET | Historical open interest |
 | `/api/symbols` | GET | Available trading symbols |
 | `/api/liquidations/history` | GET | Liquidation history from SQLite |
@@ -310,7 +319,13 @@ Pre-trade intelligence panel:
 - Weighted consensus across 15m, 1h, 4h, 24h timeframes
 
 ### Exchanges
-Side-by-side price comparison from Binance, Bybit, and OKX.
+Side-by-side price comparison from Binance, Bybit, and OKX:
+- **Shared timeframe selector** for all 3 charts: RT (1s live candle), 5m, 15m, 1h, 4h
+- Per-exchange kline data fetched from each exchange's native API (Binance FAPI, Bybit V5, OKX)
+- Shared minimum USD filter for all 3 tape streams
+- OI share bar, Order Book delta bar per exchange
+- Scroll-to-latest (`»`) button on each chart
+- Funding rate + countdown per exchange
 
 ## Performance Notes
 
