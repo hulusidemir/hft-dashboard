@@ -20,6 +20,7 @@ import { fetchMrData } from './services/MrService.js';
 import { getRecentLiquidations } from './db/LiquidationDB.js';
 import { fetchCoinInfo } from './services/CoinInfoService.js';
 import { fetchKlines, fetchOIHistory } from './services/KlineService.js';
+import type { KlineExchange } from './services/KlineService.js';
 import { fetchCoinNews } from './services/NewsService.js';
 import { fetchMarketOverview } from './services/OverviewService.js';
 
@@ -220,11 +221,12 @@ export function startServer(options: ServerOptions): Promise<ServerHandle> {
     const interval = req.getQuery('interval') || '5m';
     const limitStr = req.getQuery('limit');
     const limit = limitStr ? Math.min(Number(limitStr), 1500) : 500;
+    const exchange = (req.getQuery('exchange') || 'binance').toLowerCase() as KlineExchange;
 
     let aborted = false;
     res.onAborted(() => { aborted = true; });
 
-    fetchKlines(symbol, interval, limit)
+    fetchKlines(symbol, interval, limit, exchange)
       .then((result) => {
         if (aborted) return;
         res.cork(() => {

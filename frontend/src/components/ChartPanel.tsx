@@ -3,7 +3,7 @@
 // lightweight-charts v5 · RT: 1s çizgi · 5m/15m/1h/4h: Mum grafik
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import {
   createChart,
   LineSeries,
@@ -85,6 +85,7 @@ export default function ChartPanel({ onChartReady, timeframe, onTimeframeChange 
   const currentTfRef    = useRef<ChartTimeframe>('RT');
 
   currentTfRef.current = timeframe;
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
 
   const chartReadyCb = useCallback((chart: IChartApi) => {
     if (onChartReady) onChartReady(chart);
@@ -140,6 +141,13 @@ export default function ChartPanel({ onChartReady, timeframe, onTimeframeChange 
     ro.observe(container);
 
     chartReadyCb(chart);
+
+    // Scroll-to-latest detection — show » button when user scrolls away
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      try {
+        setShowScrollBtn(chart.timeScale().scrollPosition() < 3);
+      } catch { /* chart removed */ }
+    });
 
     // Double-click → scroll to real time
     const handleDblClick = () => {
@@ -204,6 +212,29 @@ export default function ChartPanel({ onChartReady, timeframe, onTimeframeChange 
       });
 
       chart.timeScale().applyOptions({ secondsVisible: true, barSpacing: 4 });
+
+      // Seed with current price — prevents empty chart flash on TF→RT switch
+      const currentState = marketStore.getState();
+      prevTradeLen.current = currentState.trades.length; // skip replaying old trades
+      if (currentState.trades.length > 0) {
+        const TZ_OFFSET = 3 * 3600;
+        const latest = currentState.trades[0]!;
+        const tickTimeSeed = Math.floor(latest.timestamp / 1000) + TZ_OFFSET;
+        const pp = pricePrecision(latest.price);
+        series.applyOptions({
+          priceFormat: { type: 'price', precision: pp.precision, minMove: pp.minMove },
+        });
+        precisionSet.current = true;
+        lastTickTime.current = tickTimeSeed;
+        try {
+          series.update({ time: tickTimeSeed as UTCTimestamp, value: latest.price });
+          priceLineRef.current?.applyOptions({ price: latest.price });
+        } catch { /* */ }
+      }
+
+      // Reset timescale — clear old historical range
+      chart.timeScale().scrollToRealTime();
+      setShowScrollBtn(false);
     } else {
       // ── Candlestick series for historical ──
       const series = chart.addSeries(CandlestickSeries, {
@@ -409,6 +440,33 @@ export default function ChartPanel({ onChartReady, timeframe, onTimeframeChange 
           ref={containerRef}
           style={{ width: '100%', height: '100%' }}
         />
+        {/* Scroll to latest button — TradingView style */}
+        {showScrollBtn && (
+          <button
+            onClick={() => {
+              try { chartRef.current?.timeScale().scrollToRealTime(); } catch { /* */ }
+              setShowScrollBtn(false);
+            }}
+            title="Scroll to latest"
+            style={{
+              position: 'absolute',
+              bottom: 28,
+              right: 8,
+              zIndex: 20,
+              background: 'rgba(40,40,40,0.9)',
+              border: '1px solid #555',
+              borderRadius: 4,
+              color: '#ccc',
+              fontSize: 14,
+              fontWeight: 700,
+              cursor: 'pointer',
+              padding: '3px 10px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+            }}
+          >
+            »
+          </button>
+        )}
         {/* OHLC legend overlay (candlestick mode only) */}
         {timeframe !== 'RT' && (
           <div

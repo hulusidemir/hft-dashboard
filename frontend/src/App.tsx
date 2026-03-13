@@ -3,11 +3,14 @@ import type { IChartApi } from 'lightweight-charts';
 import { startMarketConnection, stopMarketConnection, useMarketStore } from './stores/marketStore';
 import { syncMultipleCharts } from './utils/chartSync';
 import HeatmapCanvas from './components/HeatmapCanvas';
+import { HeatmapGroupingSelector } from './components/HeatmapCanvas';
+import type { HeatmapGrouping } from './components/HeatmapCanvas';
 import ChartPanel from './components/ChartPanel';
 import type { ChartTimeframe } from './components/ChartPanel';
 import CVDChart from './components/CVDChart';
 import OIChart from './components/OIChart';
 import TapeCanvas from './components/TapeCanvas';
+import { TapeFilterInput } from './components/TapeCanvas';
 import LiquidationFeed from './components/LiquidationFeed';
 import SystemMonitor from './components/SystemMonitor';
 import RadarPanel from './components/RadarPanel';
@@ -116,6 +119,8 @@ function App() {
   const currentSymbol = useMarketStore((s) => s.currentSymbol);
   const activeView    = useMarketStore((s) => s.activeView);
   const [timeframe, setTimeframe] = useState<ChartTimeframe>('RT');
+  const [heatmapGrouping, setHeatmapGrouping] = useState<HeatmapGrouping>('RT');
+  const [tapeMinUSD, setTapeMinUSD] = useState<number>(0);
 
   const priceChartRef = useRef<IChartApi | null>(null);
   const cvdChartRef   = useRef<IChartApi | null>(null);
@@ -223,9 +228,29 @@ function App() {
           </div>
 
           {/* LOB Isı Haritası — kalan alan */}
-          <PanelLabel text="LOB · Order Book Heatmap" />
+          <div style={{
+            height: 18,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0 6px',
+            background: '#0a0a0a',
+            borderBottom: '1px solid #1a1a1a',
+            flexShrink: 0,
+          }}>
+            <span style={{
+              fontSize: 9,
+              fontWeight: 600,
+              color: '#444',
+              letterSpacing: 1,
+              textTransform: 'uppercase' as const,
+            }}>
+              LOB · Order Book Heatmap
+            </span>
+            <HeatmapGroupingSelector value={heatmapGrouping} onChange={setHeatmapGrouping} />
+          </div>
           <div style={{ flex: 1, minHeight: 0 }}>
-            <HeatmapCanvas key={currentSymbol} />
+            <HeatmapCanvas key={currentSymbol} grouping={heatmapGrouping} />
           </div>
         </div>
 
@@ -280,9 +305,29 @@ function App() {
           </div>
 
           {/* Tape — %70 yükseklik */}
-          <PanelLabel text="Tape · Time & Sales" />
+          <div style={{
+            height: 18,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0 6px',
+            background: '#0a0a0a',
+            borderBottom: '1px solid #1a1a1a',
+            flexShrink: 0,
+          }}>
+            <span style={{
+              fontSize: 9,
+              fontWeight: 600,
+              color: '#444',
+              letterSpacing: 1,
+              textTransform: 'uppercase' as const,
+            }}>
+              Tape · Time &amp; Sales
+            </span>
+            <TapeFilterInput value={tapeMinUSD} onChange={setTapeMinUSD} />
+          </div>
           <div style={{ flex: 7, minHeight: 0 }}>
-            <TapeCanvas key={currentSymbol} />
+            <TapeCanvas key={currentSymbol} minUSD={tapeMinUSD} />
           </div>
         </div>
       </div>

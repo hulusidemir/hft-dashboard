@@ -4,7 +4,7 @@
 // lightweight-charts v5 · ChartPanel/CVDChart ile X-ekseni senkronize
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import {
   createChart,
   BaselineSeries,
@@ -67,6 +67,7 @@ export default function OIChart({ onChartReady, timeframe }: OIChartProps) {
   const currentTfRef         = useRef<ChartTimeframe>('RT');
 
   currentTfRef.current = timeframe;
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
 
   const chartReadyCb = useCallback((chart: IChartApi) => {
     if (onChartReady) onChartReady(chart);
@@ -127,6 +128,13 @@ export default function OIChart({ onChartReady, timeframe }: OIChartProps) {
 
     chartReadyCb(chart);
 
+    // Scroll-to-latest detection
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      try {
+        setShowScrollBtn(chart.timeScale().scrollPosition() < 3);
+      } catch { /* chart removed */ }
+    });
+
     const handleDblClick = () => {
       try { chart.timeScale().scrollToRealTime(); } catch { /* */ }
     };
@@ -184,6 +192,22 @@ export default function OIChart({ onChartReady, timeframe }: OIChartProps) {
       baselineSeriesRef.current = series;
 
       chart.timeScale().applyOptions({ secondsVisible: true, barSpacing: 6 });
+
+      // Seed with current OI — prevents empty chart flash on TF→RT switch
+      const currentState = marketStore.getState();
+      const oi = currentState.openInterest;
+      if (oi && oi.totalOI > 0) {
+        initialTotalOIRef.current = oi.totalOI;
+        const cumulativeDelta = 0;
+        lastCumulativeDeltaRef.current = cumulativeDelta;
+        const timeSeed = Math.floor(oi.timestamp / 1000) + TZ_OFFSET;
+        lastPlottedRef.current = { time: timeSeed, value: cumulativeDelta };
+        try { series.update({ time: timeSeed as UTCTimestamp, value: cumulativeDelta }); } catch { /* */ }
+        updateLegend(cumulativeDelta);
+      }
+
+      chart.timeScale().scrollToRealTime();
+      setShowScrollBtn(false);
     } else {
       // ── Candlestick series for historical OI delta ──
       const series = chart.addSeries(CandlestickSeries, {
@@ -367,7 +391,33 @@ export default function OIChart({ onChartReady, timeframe }: OIChartProps) {
         ref={containerRef}
         style={{ width: '100%', height: '100%' }}
       />
-
+      {/* Scroll to latest button */}
+      {showScrollBtn && (
+        <button
+          onClick={() => {
+            try { chartRef.current?.timeScale().scrollToRealTime(); } catch { /* */ }
+            setShowScrollBtn(false);
+          }}
+          title="Scroll to latest"
+          style={{
+            position: 'absolute',
+            bottom: 28,
+            right: 8,
+            zIndex: 20,
+            background: 'rgba(40,40,40,0.9)',
+            border: '1px solid #555',
+            borderRadius: 4,
+            color: '#ccc',
+            fontSize: 14,
+            fontWeight: 700,
+            cursor: 'pointer',
+            padding: '3px 10px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+          }}
+        >
+          »
+        </button>
+      )}
       {/* ── Sol üst: Başlık lejantı ──────────────────────────────────────── */}
       <div
         style={{

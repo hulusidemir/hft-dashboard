@@ -917,55 +917,62 @@ function ExchangeColumn({ label, data, color, now }: {
   return (
     <div style={{
       background: '#0a0a14',
-      border: '1px solid #1a1a2e',
+      border: `1px solid ${color}22`,
       borderRadius: 8,
-      padding: '14px 16px',
+      padding: '14px 0 6px 0',
+      overflow: 'hidden',
     }}>
       <div style={{
         fontSize: 13,
         fontWeight: 900,
         color,
         letterSpacing: 2,
-        marginBottom: 12,
+        marginBottom: 10,
         textAlign: 'center',
-        borderBottom: `2px solid ${color}33`,
+        borderBottom: `2px solid ${color}44`,
         paddingBottom: 8,
+        marginLeft: 16,
+        marginRight: 16,
       }}>
         {label}
       </div>
 
-      <ExchangeRow label="Open Interest" value={fmtUsd(data.openInterest)} />
-      <ExchangeRow label="OI Delta" value={`${data.oiDelta >= 0 ? '+' : ''}${fmtUsd(data.oiDelta)}`} color={data.oiDelta >= 0 ? '#50ff50' : '#ff5050'} />
-      <ExchangeRow label="Funding Rate" value={fmtPct(data.fundingRate)} color={data.fundingRate >= 0 ? '#50ff50' : '#ff5050'} />
+      <ExchangeRow label="Open Interest" value={fmtUsd(data.openInterest)} stripe={false} />
+      <ExchangeRow label="OI Delta" value={`${data.oiDelta >= 0 ? '+' : ''}${fmtUsd(data.oiDelta)}`} color={data.oiDelta >= 0 ? '#50ff50' : '#ff5050'} stripe />
+      <ExchangeRow label="Funding Rate" value={fmtPct(data.fundingRate)} color={data.fundingRate >= 0 ? '#50ff50' : '#ff5050'} stripe={false} />
       <ExchangeRow
         label="Next Funding"
         value={data.nextFundingTime > 0 ? fmtCountdown(data.nextFundingTime, now) : '—'}
         color="#ff9900"
+        stripe
       />
       <ExchangeRow
         label="Funding Interval"
         value={data.fundingIntervalHours > 0 ? `${data.fundingIntervalHours}h` : '—'}
         color="#888"
+        stripe={false}
       />
-      <ExchangeRow label="Net CVD" value={fmtUsd(data.netCvd)} color={data.netCvd >= 0 ? '#50ff50' : '#ff5050'} />
-      <ExchangeRow label="L/S Ratio" value={fmtRatio(data.longShortRatio)} color={data.longShortRatio >= 1 ? '#50ff50' : '#ff5050'} />
-      <ExchangeRow label="Long %" value={(data.longRatio * 100).toFixed(1) + '%'} color="#50ff50" />
-      <ExchangeRow label="Short %" value={(data.shortRatio * 100).toFixed(1) + '%'} color="#ff5050" />
+      <ExchangeRow label="Net CVD" value={fmtUsd(data.netCvd)} color={data.netCvd >= 0 ? '#50ff50' : '#ff5050'} stripe />
+      <ExchangeRow label="L/S Ratio" value={fmtRatio(data.longShortRatio)} color={data.longShortRatio >= 1 ? '#50ff50' : '#ff5050'} stripe={false} />
+      <ExchangeRow label="Long %" value={(data.longRatio * 100).toFixed(1) + '%'} color="#50ff50" stripe />
+      <ExchangeRow label="Short %" value={(data.shortRatio * 100).toFixed(1) + '%'} color="#ff5050" stripe={false} />
 
-      <div style={{ height: 1, background: '#1a1a2e', margin: '8px 0' }} />
+      <div style={{ height: 1, background: '#2a2a3e', margin: '6px 12px' }} />
 
       <ExchangeRow
         label={data.liqEstimated ? 'Liq. Longs ~' : 'Liq. Longs'}
         value={fmtUsd(data.liqLongUsd)}
         color="#ff5050"
+        stripe
       />
       <ExchangeRow
         label={data.liqEstimated ? 'Liq. Shorts ~' : 'Liq. Shorts'}
         value={fmtUsd(data.liqShortUsd)}
         color="#50ff50"
+        stripe={false}
       />
       {data.liqEstimated && (
-        <div style={{ fontSize: 8, color: '#555', textAlign: 'right', marginTop: 2 }}>
+        <div style={{ fontSize: 8, color: '#555', textAlign: 'right', marginTop: 2, paddingRight: 14 }}>
           {t('oiEstimated')}
         </div>
       )}
@@ -973,17 +980,29 @@ function ExchangeColumn({ label, data, color, now }: {
   );
 }
 
-function ExchangeRow({ label, value, color }: { label: string; value: string; color?: string }) {
+function ExchangeRow({ label, value, color, stripe }: { label: string; value: string; color?: string; stripe?: boolean }) {
   return (
-    <div style={{
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      padding: '4px 0',
-      fontSize: 11,
-    }}>
-      <span style={{ color: '#777' }}>{label}</span>
-      <span style={{ color: color ?? '#ccc', fontWeight: 700 }}>{value}</span>
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: '6px 14px',
+        fontSize: 11,
+        background: stripe ? 'rgba(255,255,255,0.02)' : 'transparent',
+        borderBottom: '1px solid rgba(255,255,255,0.03)',
+        cursor: 'default',
+        transition: 'background 0.12s',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = 'rgba(255,255,255,0.07)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = stripe ? 'rgba(255,255,255,0.02)' : 'transparent';
+      }}
+    >
+      <span style={{ color: '#888', letterSpacing: 0.3 }}>{label}</span>
+      <span style={{ color: color ?? '#ccc', fontWeight: 700, fontFamily: 'monospace', letterSpacing: 0.5 }}>{value}</span>
     </div>
   );
 }

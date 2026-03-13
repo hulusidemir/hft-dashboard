@@ -8,6 +8,92 @@ import { useRef, useEffect } from 'react';
 import { getOrderBook } from '../stores/marketStore';
 import type { UnifiedOrderBook, PriceLevel } from '../stores/marketStore';
 
+// ── Gruplandırma Modu Tanımları ─────────────────────────────────────────────
+// RT:    Ham tick seviyesi — scalping için
+// SHORT: Kısa vade gruplandırma — 1-5dk trade'ler
+// MID:   Orta vade gruplandırma — 15dk-1sa trade'ler
+// LONG:  Uzun vade gruplandırma — swing trade perspektifi
+export type HeatmapGrouping = 'RT' | 'SHORT' | 'MID' | 'LONG';
+
+const GROUPING_LABELS: Record<HeatmapGrouping, string> = {
+  RT:    'RT',
+  SHORT: 'S',
+  MID:   'M',
+  LONG:  'L',
+};
+
+const GROUPING_TOOLTIPS: Record<HeatmapGrouping, string> = {
+  RT:    'Realtime — Raw tick levels',
+  SHORT: 'Short-term — Scalp grouping',
+  MID:   'Mid-term — Intraday grouping',
+  LONG:  'Long-term — Swing grouping',
+};
+
+/**
+ * MidPrice'a göre dinamik gruplandırma step'i hesaplar.
+ * Profesyonel trader perspektifi:
+ * - SHORT: ~0.05% fiyat aralığı gruplandırma
+ * - MID:   ~0.25% fiyat aralığı gruplandırma
+ * - LONG:  ~1.0% fiyat aralığı gruplandırma
+ */
+function getGroupStep(midPrice: number, mode: HeatmapGrouping): number {
+  if (mode === 'RT') return 0; // gruplandırma yok
+
+  // Fiyatın büyüklük mertebesine göre "güzel" yuvarlak sayılar üret
+  const pctMap: Record<string, number> = { SHORT: 0.0005, MID: 0.0025, LONG: 0.01 };
+  const pct = pctMap[mode] ?? 0;
+  const raw = midPrice * pct;
+
+  // "Güzel" yuvarlak sayıya yuvarla: 1, 2, 5, 10, 25, 50, 100, 250, 500 …
+  if (raw <= 0) return 0;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / mag; // 1..10 aralığında
+  let nice: number;
+  if (norm <= 1.5)      nice = 1;
+  else if (norm <= 3.5) nice = 2.5;
+  else if (norm <= 7.5) nice = 5;
+  else                  nice = 10;
+  return nice * mag;
+}
+
+/**
+ * Fiyat seviyelerini belirli step'e göre gruplandırır.
+ * Aynı grup içindeki quantity'ler toplanır, exchange qty'ler korunur.
+ */
+function groupLevels(levels: PriceLevel[], step: number, isBid: boolean): PriceLevel[] {
+  if (step <= 0 || levels.length === 0) return levels;
+
+  const grouped = new Map<number, PriceLevel>();
+
+  for (const lv of levels) {
+    // Fiyatı gruplama step'ine yuvarla
+    const groupPrice = isBid
+      ? Math.floor(lv.price / step) * step   // bid: aşağı yuvarla
+      : Math.ceil(lv.price / step) * step;    // ask: yukarı yuvarla
+
+    const existing = grouped.get(groupPrice);
+    if (existing) {
+      existing.quantity    += lv.quantity;
+      existing.binanceQty += lv.binanceQty;
+      existing.bybitQty   += lv.bybitQty;
+      existing.okxQty     += lv.okxQty;
+    } else {
+      grouped.set(groupPrice, {
+        price:      groupPrice,
+        quantity:   lv.quantity,
+        binanceQty: lv.binanceQty,
+        bybitQty:   lv.bybitQty,
+        okxQty:     lv.okxQty,
+      });
+    }
+  }
+
+  const result = Array.from(grouped.values());
+  // Sıralama: bid azalan, ask artan
+  result.sort((a, b) => isBid ? b.price - a.price : a.price - b.price);
+  return result;
+}
+
 // ── Renk / Stil sabitleri ───────────────────────────────────────────────────
 const BG_COLOR          = '#000000';
 const MID_DIVIDER_H     = 28;            // midPrice bandı yüksekliği
@@ -70,6 +156,7 @@ function drawFrame(
   width: number,
   height: number,
   dpr: number,
+  grouping: HeatmapGrouping,
 ): void {
   const book = getOrderBook();
 
@@ -92,6 +179,19 @@ function drawFrame(
   ctx.save();
   ctx.scale(dpr, dpr);
 
+  // ── Gruplandırma uygula (eğer seçiliyse) ───────────────────────────────
+  const groupStep = getGroupStep(book.midPrice, grouping);
+  const processedBids = groupStep > 0 ? groupLevels(book.bids, groupStep, true)  : book.bids;
+  const processedAsks = groupStep > 0 ? groupLevels(book.asks, groupStep, false) : book.asks;
+
+  // ── Gruplandırma bilgisi göster (sağ üst) ──────────────────────────────
+  if (grouping !== 'RT' && groupStep > 0) {
+    ctx.font = '9px Arial';
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#666';
+    ctx.fillText(`Step: ${formatPrice(groupStep)}`, width - 6, 12);
+  }
+
   // ── Layout hesapla ──────────────────────────────────────────────────────
   const midY         = Math.floor(height / 2);
   const askZoneTop   = 0;
@@ -102,8 +202,8 @@ function drawFrame(
   const maxAskRows   = Math.floor(askZoneH / ROW_HEIGHT);
   const maxBidRows   = Math.floor(bidZoneH / ROW_HEIGHT);
 
-  const visibleAsks  = book.asks.slice(0, maxAskRows);
-  const visibleBids  = book.bids.slice(0, maxBidRows);
+  const visibleAsks  = processedAsks.slice(0, maxAskRows);
+  const visibleBids  = processedBids.slice(0, maxBidRows);
 
   // En yüksek hacmi bul — bar genişliği normalizasyonu için
   const maxQty = findMaxQuantity(visibleBids, visibleAsks);
@@ -248,11 +348,21 @@ function findMaxQuantity(bids: PriceLevel[], asks: PriceLevel[]): number {
 
 // ── React Bileşeni ──────────────────────────────────────────────────────────
 
-export default function HeatmapCanvas(): JSX.Element {
+interface HeatmapCanvasProps {
+  grouping: HeatmapGrouping;
+}
+
+export default function HeatmapCanvas({ grouping }: HeatmapCanvasProps): JSX.Element {
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const sizeRef      = useRef({ w: 0, h: 0 });
   const rafRef       = useRef<number>(0);
+  const groupingRef  = useRef<HeatmapGrouping>(grouping);
+
+  // Grouping prop değiştiğinde ref'i güncelle — RAF döngüsü bunu okur
+  useEffect(() => {
+    groupingRef.current = grouping;
+  }, [grouping]);
 
   useEffect(() => {
     const canvas    = canvasRef.current;
@@ -292,7 +402,7 @@ export default function HeatmapCanvas(): JSX.Element {
       const dpr = window.devicePixelRatio || 1;
 
       if (w > 0 && h > 0) {
-        drawFrame(ctx!, w, h, dpr);
+        drawFrame(ctx!, w, h, dpr, groupingRef.current);
       }
 
       rafRef.current = requestAnimationFrame(loop);
@@ -322,6 +432,49 @@ export default function HeatmapCanvas(): JSX.Element {
         ref={canvasRef}
         style={{ display: 'block' }}
       />
+    </div>
+  );
+}
+
+// ── Gruplandırma Seçici Bileşeni (dışarıya export) ─────────────────────────
+
+export function HeatmapGroupingSelector({
+  value,
+  onChange,
+}: {
+  value: HeatmapGrouping;
+  onChange: (g: HeatmapGrouping) => void;
+}): JSX.Element {
+  const modes: HeatmapGrouping[] = ['RT', 'SHORT', 'MID', 'LONG'];
+
+  return (
+    <div style={{
+      display: 'flex',
+      gap: 2,
+      padding: '0 6px',
+    }}>
+      {modes.map((m) => (
+        <button
+          key={m}
+          onClick={() => onChange(m)}
+          title={GROUPING_TOOLTIPS[m]}
+          style={{
+            background: value === m ? '#333' : 'transparent',
+            color: value === m ? '#fff' : '#555',
+            border: value === m ? '1px solid #555' : '1px solid transparent',
+            borderRadius: 3,
+            fontSize: 9,
+            fontWeight: 600,
+            padding: '1px 6px',
+            cursor: 'pointer',
+            letterSpacing: 0.5,
+            lineHeight: '14px',
+            transition: 'all 0.1s',
+          }}
+        >
+          {GROUPING_LABELS[m]}
+        </button>
+      ))}
     </div>
   );
 }

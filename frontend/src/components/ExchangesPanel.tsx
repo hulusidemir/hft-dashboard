@@ -7,13 +7,16 @@ import { useRef, useEffect, useCallback, useState } from 'react';
 import {
   createChart,
   CandlestickSeries,
+  LineSeries,
   ColorType,
+  LineStyle,
 } from 'lightweight-charts';
 import type {
   IChartApi,
   ISeriesApi,
   IPriceLine,
   UTCTimestamp,
+  CandlestickData,
 } from 'lightweight-charts';
 import { marketStore, useMarketStore, getTrades } from '../stores/marketStore';
 import type { UnifiedTrade } from '../stores/marketStore';
@@ -24,6 +27,33 @@ const CANDLE_INTERVAL_S = 1;
 const TZ_OFFSET = 3 * 3600; // UTC+3
 
 const REST_BASE = import.meta.env.VITE_BACKEND_URL || 'http://localhost:9000';
+
+// ── Timeframe config ────────────────────────────────────────────────────────
+type ExchangeTimeframe = 'RT' | '5m' | '15m' | '1h' | '4h';
+const EX_TIMEFRAMES: ExchangeTimeframe[] = ['RT', '5m', '15m', '1h', '4h'];
+
+interface KlineBar {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  turnover: number;
+}
+
+/** Fiyata göre uygun precision ve minMove döndür */
+function pricePrecision(price: number): { precision: number; minMove: number } {
+  if (price >= 10_000) return { precision: 1, minMove: 0.1 };
+  if (price >= 1_000)  return { precision: 2, minMove: 0.01 };
+  if (price >= 100)    return { precision: 3, minMove: 0.001 };
+  if (price >= 10)     return { precision: 4, minMove: 0.0001 };
+  if (price >= 1)      return { precision: 4, minMove: 0.0001 };
+  if (price >= 0.1)    return { precision: 5, minMove: 0.00001 };
+  if (price >= 0.01)   return { precision: 6, minMove: 0.000001 };
+  if (price >= 0.001)  return { precision: 7, minMove: 0.0000001 };
+  return { precision: 8, minMove: 0.00000001 };
+}
 
 const EXCHANGES = ['binance', 'bybit', 'okx'] as const;
 type ExchangeName = typeof EXCHANGES[number];
@@ -104,18 +134,34 @@ function fmtCountdown(targetMs: number, nowMs: number): string {
 }
 
 // ── Single Exchange Chart ─────────────────────────────────────────────────
-function ExchangeChart({ exchange, funding, now }: { exchange: ExchangeName; funding: ExchangeFunding | null; now: number }) {
+interface ExchangeChartProps {
+  exchange: ExchangeName;
+  funding: ExchangeFunding | null;
+  now: number;
+  tapeMinUSD: number;
+  timeframe: ExchangeTimeframe;
+}
+
+function ExchangeChart({ exchange, funding, now, tapeMinUSD, timeframe }: ExchangeChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const lineSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const priceLineRef = useRef<IPriceLine | null>(null);
   const currentCandle = useRef<LiveCandle | null>(null);
   const prevTradeLen = useRef(0);
+  const lastTickTime = useRef(0);
+  const precisionSet = useRef(false);
+  const currentTfRef = useRef<ExchangeTimeframe>('RT');
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+
+  currentTfRef.current = timeframe;
 
   const colors = EXCHANGE_COLORS[exchange];
 
+  // ── RT Candlestick update ──
   const updateCandle = useCallback((trade: UnifiedTrade) => {
-    const series = seriesRef.current;
+    const series = candleSeriesRef.current;
     if (!series) return;
 
     const tradeTimeSec = Math.floor(trade.timestamp / 1000) + TZ_OFFSET;
@@ -164,6 +210,68 @@ function ExchangeChart({ exchange, funding, now }: { exchange: ExchangeName; fun
     }
   }, []);
 
+  // ── RT Line update ──
+  const updateLine = useCallback((trade: UnifiedTrade) => {
+    const series = lineSeriesRef.current;
+    if (!series) return;
+
+    const tradeTimeSec = Math.floor(trade.timestamp / 1000) + TZ_OFFSET;
+    const tickTime = tradeTimeSec - (tradeTimeSec % 1);
+    const price = trade.price;
+
+    if (tickTime < lastTickTime.current) return;
+    lastTickTime.current = tickTime;
+
+    if (!precisionSet.current && price > 0) {
+      precisionSet.current = true;
+      const pp = pricePrecision(price);
+      series.applyOptions({
+        priceFormat: { type: 'price', precision: pp.precision, minMove: pp.minMove },
+      });
+    }
+
+    try {
+      series.update({ time: tickTime as UTCTimestamp, value: price });
+    } catch { /* */ }
+
+    if (priceLineRef.current) {
+      priceLineRef.current.applyOptions({ price });
+    }
+  }, []);
+
+  // ── Fetch klines for historical timeframe ──
+  const fetchKlineData = useCallback(async (
+    symbol: string,
+    tf: ExchangeTimeframe,
+    series: ISeriesApi<'Candlestick'>,
+  ) => {
+    try {
+      const resp = await fetch(
+        `${REST_BASE}/api/klines?symbol=${symbol}&interval=${tf}&limit=500&exchange=${exchange}`,
+      );
+      if (!resp.ok) return;
+      const bars = (await resp.json()) as KlineBar[];
+      if (!bars.length) return;
+
+      const pp = pricePrecision(bars[0]!.close);
+      series.applyOptions({
+        priceFormat: { type: 'price', precision: pp.precision, minMove: pp.minMove },
+      });
+
+      const candleData: CandlestickData[] = bars.map((b) => ({
+        time: (b.time + TZ_OFFSET) as UTCTimestamp,
+        open: b.open,
+        high: b.high,
+        low: b.low,
+        close: b.close,
+      }));
+
+      series.setData(candleData);
+      chartRef.current?.timeScale().fitContent();
+    } catch { /* silent */ }
+  }, [exchange]);
+
+  // ── Build chart once ──
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -203,29 +311,11 @@ function ExchangeChart({ exchange, funding, now }: { exchange: ExchangeName; fun
 
     chartRef.current = chart;
 
-    const series = chart.addSeries(CandlestickSeries, {
-      upColor: colors.up,
-      downColor: colors.down,
-      borderUpColor: colors.up,
-      borderDownColor: colors.down,
-      wickUpColor: colors.up,
-      wickDownColor: colors.down,
-      priceFormat: {
-        type: 'price',
-        precision: 8,
-        minMove: 0.00000001,
-      },
-    });
-
-    seriesRef.current = series;
-
-    priceLineRef.current = series.createPriceLine({
-      price: 0,
-      color: colors.label,
-      lineWidth: 1,
-      lineStyle: 2,
-      axisLabelVisible: true,
-      title: 'Last',
+    // Scroll button detection
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      try {
+        setShowScrollBtn(chart.timeScale().scrollPosition() < 3);
+      } catch { /* */ }
     });
 
     const ro = new ResizeObserver((entries) => {
@@ -238,8 +328,121 @@ function ExchangeChart({ exchange, funding, now }: { exchange: ExchangeName; fun
     });
     ro.observe(container);
 
-    // ── Store subscription — sadece ilgili borsanın trade'lerini filtrele ──
+    // Double-click → scrollToRealTime
+    const handleDblClick = () => {
+      try { chart.timeScale().scrollToRealTime(); } catch { /* */ }
+    };
+    container.addEventListener('dblclick', handleDblClick);
+
+    return () => {
+      container.removeEventListener('dblclick', handleDblClick);
+      ro.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      lineSeriesRef.current = null;
+      priceLineRef.current = null;
+      currentCandle.current = null;
+      prevTradeLen.current = 0;
+      lastTickTime.current = 0;
+      precisionSet.current = false;
+    };
+  }, [exchange, colors]);
+
+  // ── Switch series based on timeframe ──
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    // Remove existing series
+    if (candleSeriesRef.current) {
+      try { chart.removeSeries(candleSeriesRef.current); } catch { /* */ }
+      candleSeriesRef.current = null;
+    }
+    if (lineSeriesRef.current) {
+      try { chart.removeSeries(lineSeriesRef.current); } catch { /* */ }
+      lineSeriesRef.current = null;
+    }
+    priceLineRef.current = null;
+    currentCandle.current = null;
+    prevTradeLen.current = 0;
+    lastTickTime.current = 0;
+    precisionSet.current = false;
+
+    if (timeframe === 'RT') {
+      // ── RT: 1s Candlestick from live trades ──
+      const series = chart.addSeries(CandlestickSeries, {
+        upColor: colors.up,
+        downColor: colors.down,
+        borderUpColor: colors.up,
+        borderDownColor: colors.down,
+        wickUpColor: colors.up,
+        wickDownColor: colors.down,
+        priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
+      });
+      candleSeriesRef.current = series;
+
+      priceLineRef.current = series.createPriceLine({
+        price: 0,
+        color: colors.label,
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: 'Last',
+      });
+
+      chart.timeScale().applyOptions({ secondsVisible: true, barSpacing: 6 });
+
+      // Seed with current price
+      const currentState = marketStore.getState();
+      prevTradeLen.current = currentState.trades.length;
+      if (currentState.trades.length > 0) {
+        const latest = currentState.trades.find(t => t.exchange.toLowerCase() === exchange);
+        if (latest) {
+          const pp = pricePrecision(latest.price);
+          series.applyOptions({
+            priceFormat: { type: 'price', precision: pp.precision, minMove: pp.minMove },
+          });
+          const tickTime = Math.floor(latest.timestamp / 1000) + TZ_OFFSET;
+          try {
+            series.update({ time: (tickTime - (tickTime % CANDLE_INTERVAL_S)) as UTCTimestamp,
+              open: latest.price, high: latest.price, low: latest.price, close: latest.price });
+            priceLineRef.current?.applyOptions({ price: latest.price });
+          } catch { /* */ }
+        }
+      }
+
+      chart.timeScale().scrollToRealTime();
+      setShowScrollBtn(false);
+    } else {
+      // ── Historical: Candlestick from kline API ──
+      const series = chart.addSeries(CandlestickSeries, {
+        upColor: colors.up,
+        downColor: colors.down,
+        borderUpColor: colors.up,
+        borderDownColor: colors.down,
+        wickUpColor: colors.up,
+        wickDownColor: colors.down,
+        priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      });
+      candleSeriesRef.current = series;
+
+      chart.timeScale().applyOptions({
+        secondsVisible: false,
+        barSpacing: timeframe === '5m' ? 5 : timeframe === '15m' ? 6 : 8,
+      });
+
+      const symbol = marketStore.getState().currentSymbol;
+      void fetchKlineData(symbol, timeframe, series);
+    }
+  }, [timeframe, exchange, colors, fetchKlineData]);
+
+  // ── RT trade subscription ──
+  useEffect(() => {
+    if (timeframe !== 'RT') return;
+
     const unsubscribe = marketStore.subscribe((state, prevState) => {
+      if (currentTfRef.current !== 'RT') return;
       if (state.trades === prevState.trades) return;
       if (state.trades.length === 0) return;
 
@@ -263,24 +466,22 @@ function ExchangeChart({ exchange, funding, now }: { exchange: ExchangeName; fun
       }
     });
 
-    // Double-click → scrollToRealTime
-    const handleDblClick = () => {
-      try { chart.timeScale().scrollToRealTime(); } catch { /* */ }
-    };
-    container.addEventListener('dblclick', handleDblClick);
+    return () => { unsubscribe(); };
+  }, [timeframe, exchange, updateCandle]);
 
-    return () => {
-      container.removeEventListener('dblclick', handleDblClick);
-      unsubscribe();
-      ro.disconnect();
-      chart.remove();
-      chartRef.current = null;
-      seriesRef.current = null;
-      priceLineRef.current = null;
-      currentCandle.current = null;
-      prevTradeLen.current = 0;
-    };
-  }, [exchange, colors, updateCandle]);
+  // ── Auto-refresh klines every 15s for non-RT ──
+  useEffect(() => {
+    if (timeframe === 'RT') return;
+
+    const interval = setInterval(() => {
+      const series = candleSeriesRef.current;
+      if (!series) return;
+      const symbol = marketStore.getState().currentSymbol;
+      void fetchKlineData(symbol, timeframe, series);
+    }, 15_000);
+
+    return () => clearInterval(interval);
+  }, [timeframe, exchange, fetchKlineData]);
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
@@ -319,10 +520,39 @@ function ExchangeChart({ exchange, funding, now }: { exchange: ExchangeName; fun
         )}
       </div>
       {/* Chart Container — 50% */}
-      <div
-        ref={containerRef}
-        style={{ flex: 5, minHeight: 0, background: '#000' }}
-      />
+      <div style={{ flex: 5, minHeight: 0, background: '#000', position: 'relative' }}>
+        <div
+          ref={containerRef}
+          style={{ width: '100%', height: '100%' }}
+        />
+        {/* Scroll to latest button */}
+        {showScrollBtn && (
+          <button
+            onClick={() => {
+              try { chartRef.current?.timeScale().scrollToRealTime(); } catch { /* */ }
+              setShowScrollBtn(false);
+            }}
+            title="Scroll to latest"
+            style={{
+              position: 'absolute',
+              bottom: 24,
+              right: 6,
+              zIndex: 20,
+              background: 'rgba(40,40,40,0.9)',
+              border: '1px solid #555',
+              borderRadius: 4,
+              color: '#ccc',
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: 'pointer',
+              padding: '2px 8px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+            }}
+          >
+            »
+          </button>
+        )}
+      </div>
       {/* OI Bar */}
       <ExchangeOIBar exchange={exchange} />
       {/* OrderBook Delta */}
@@ -332,7 +562,7 @@ function ExchangeChart({ exchange, funding, now }: { exchange: ExchangeName; fun
         TAPE · TIME &amp; SALES
       </div>
       <div style={{ flex: 4, minHeight: 0 }}>
-        <ExchangeTape exchange={exchange} />
+        <ExchangeTape exchange={exchange} minUSD={tapeMinUSD} />
       </div>
     </div>
   );
@@ -485,11 +715,13 @@ function ExchangeOIBar({ exchange }: { exchange: ExchangeName }) {
 }
 
 // ── Exchange Tape (Canvas) ──────────────────────────────────────────────────
-function ExchangeTape({ exchange }: { exchange: ExchangeName }) {
+function ExchangeTape({ exchange, minUSD = 0 }: { exchange: ExchangeName; minUSD?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const sizeRef = useRef({ w: 0, h: 0 });
   const rafRef = useRef<number>(0);
+  const minUSDRef = useRef(minUSD);
+  minUSDRef.current = minUSD;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -524,7 +756,7 @@ function ExchangeTape({ exchange }: { exchange: ExchangeName }) {
       if (w <= 0 || h <= 0) return;
 
       const allTrades = getTrades();
-      const trades = allTrades.filter((t) => t.exchange.toLowerCase() === exchange);
+      const filterMin = minUSDRef.current;
 
       ctx!.fillStyle = TAPE_BG;
       ctx!.fillRect(0, 0, w * dpr, h * dpr);
@@ -558,18 +790,21 @@ function ExchangeTape({ exchange }: { exchange: ExchangeName }) {
       ctx!.lineTo(w, headerH);
       ctx!.stroke();
 
-      // Rows
-      const maxRows = Math.min(
-        Math.floor((h - headerH) / TAPE_ROW_HEIGHT),
-        MAX_TAPE_ROWS,
-        trades.length,
-      );
+      // Rows — iterative filter to avoid allocating filtered array each frame
+      const maxScreenRows = Math.floor((h - headerH) / TAPE_ROW_HEIGHT);
+      const maxRows = Math.min(maxScreenRows, MAX_TAPE_ROWS);
 
       ctx!.font = TAPE_FONT;
 
-      for (let i = 0; i < maxRows; i++) {
-        const trade = trades[i];
-        const y = headerH + i * TAPE_ROW_HEIGHT;
+      let drawn = 0;
+      for (let idx = 0; idx < allTrades.length && drawn < maxRows; idx++) {
+        const trade = allTrades[idx];
+        // Exchange filter
+        if (trade.exchange.toLowerCase() !== exchange) continue;
+        // USD minimum filter
+        if (filterMin > 0 && trade.quoteQty < filterMin) continue;
+
+        const y = headerH + drawn * TAPE_ROW_HEIGHT;
 
         if (trade.quoteQty >= WHALE_THRESHOLD) {
           ctx!.fillStyle = WHALE_BG;
@@ -594,13 +829,20 @@ function ExchangeTape({ exchange }: { exchange: ExchangeName }) {
 
         ctx!.fillStyle = trade.quoteQty >= WHALE_THRESHOLD ? '#ffdd33' : color;
         ctx!.fillText(fmtUSD(trade.quoteQty), colUSD, y + TAPE_ROW_HEIGHT - 3);
+
+        drawn++;
       }
 
-      if (trades.length === 0) {
+      if (allTrades.length === 0) {
         ctx!.font = '11px Arial';
         ctx!.fillStyle = '#444';
         ctx!.textAlign = 'center';
         ctx!.fillText('Waiting...', w / 2, h / 2);
+      } else if (drawn === 0 && filterMin > 0) {
+        ctx!.font = '11px Arial';
+        ctx!.fillStyle = '#444';
+        ctx!.textAlign = 'center';
+        ctx!.fillText(`No trades ≥ $${filterMin.toLocaleString()}`, w / 2, h / 2);
       }
 
       ctx!.restore();
@@ -634,6 +876,8 @@ export default function ExchangesPanel() {
   const baseCoin = currentSymbol.replace(/USDT$/i, '');
   const [fundingMap, setFundingMap] = useState<FundingMap>({ binance: null, bybit: null, okx: null });
   const [now, setNow] = useState(Date.now());
+  const [tapeMinUSD, setTapeMinUSD] = useState(0);
+  const [exTimeframe, setExTimeframe] = useState<ExchangeTimeframe>('RT');
 
   // 1s tick for countdown
   useEffect(() => {
@@ -703,7 +947,82 @@ export default function ExchangesPanel() {
         <span style={{ color: '#555' }}>·</span>
         <span>{baseCoin}/USDT</span>
         <span style={{ color: '#555' }}>·</span>
-        <span style={{ color: '#444' }}>1s Candlestick</span>
+        {/* Timeframe selector */}
+        <div style={{ display: 'flex', gap: 2 }}>
+          {EX_TIMEFRAMES.map((tf) => (
+            <button
+              key={tf}
+              onClick={() => setExTimeframe(tf)}
+              style={{
+                background: exTimeframe === tf
+                  ? (tf === 'RT' ? '#2196F3' : '#ff9900')
+                  : '#111',
+                border: `1px solid ${exTimeframe === tf
+                  ? (tf === 'RT' ? '#2196F3' : '#ff9900')
+                  : '#333'}`,
+                borderRadius: 3,
+                padding: '1px 7px',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontSize: 9,
+                fontWeight: 800,
+                letterSpacing: 0.6,
+                color: exTimeframe === tf ? '#000' : '#666',
+                transition: 'all 0.12s',
+              }}
+            >
+              {tf}
+            </button>
+          ))}
+        </div>
+        <span style={{ color: '#444', fontSize: 9 }}>
+          {exTimeframe === 'RT' ? '1s Candle' : `${exTimeframe} Candle`}
+        </span>
+        {/* Trade filter — shared across all 3 exchanges */}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ fontSize: 9, color: '#555', fontWeight: 600, whiteSpace: 'nowrap' }}>MIN $</span>
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="0"
+            value={tapeMinUSD > 0 ? tapeMinUSD.toString() : ''}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/[^0-9]/g, '');
+              setTapeMinUSD(raw ? parseInt(raw, 10) : 0);
+            }}
+            style={{
+              width: 56,
+              height: 16,
+              background: '#111',
+              border: '1px solid #333',
+              borderRadius: 3,
+              color: tapeMinUSD > 0 ? '#ffcc00' : '#666',
+              fontSize: 9,
+              fontFamily: '"Courier New", monospace',
+              fontWeight: 600,
+              padding: '0 4px',
+              outline: 'none',
+              textAlign: 'right',
+            }}
+          />
+          {tapeMinUSD > 0 && (
+            <button
+              onClick={() => setTapeMinUSD(0)}
+              title="Clear filter"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: '#666',
+                fontSize: 10,
+                cursor: 'pointer',
+                padding: '0 2px',
+                lineHeight: '14px',
+              }}
+            >
+              ✕
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 3 Exchange Charts */}
@@ -715,7 +1034,7 @@ export default function ExchangesPanel() {
         minHeight: 0,
       }}>
         {EXCHANGES.map((ex) => (
-          <ExchangeChart key={`${currentSymbol}_${ex}`} exchange={ex} funding={fundingMap[ex]} now={now} />
+          <ExchangeChart key={`${currentSymbol}_${ex}_${exTimeframe}`} exchange={ex} funding={fundingMap[ex]} now={now} tapeMinUSD={tapeMinUSD} timeframe={exTimeframe} />
         ))}
       </div>
     </div>

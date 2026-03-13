@@ -9,7 +9,7 @@ import type { UnifiedTrade } from '../stores/marketStore';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const BG_COLOR         = '#000000';
-const MAX_VISIBLE      = 100;                   // ekranda gösterilecek max satır
+const MAX_VISIBLE      = 500;                   // ekranda gösterilecek max satır (canvas yüksekliği sınırlar)
 const ROW_HEIGHT       = 16;                    // her trade satırının piksel yüksekliği
 const FONT             = '10px "Courier New", monospace';
 const WHALE_THRESHOLD  = 50_000;                // USD — bu üzeri "balina" sayılır
@@ -74,10 +74,11 @@ function drawTape(
   width: number,
   height: number,
   dpr: number,
+  minUSD: number,
 ): void {
-  const trades = getTrades();
+  const allTrades = getTrades();
 
-  // Temizle
+  // ── Temizle ───────────────────────────────────────────────────────────
   ctx.fillStyle = BG_COLOR;
   ctx.fillRect(0, 0, width * dpr, height * dpr);
 
@@ -114,18 +115,21 @@ function drawTape(
   ctx.lineTo(width, headerH);
   ctx.stroke();
 
-  // ── Trade satırları ───────────────────────────────────────────────────
-  const maxRows = Math.min(
-    Math.floor((height - headerH) / ROW_HEIGHT),
-    MAX_VISIBLE,
-    trades.length,
-  );
+  // ── Görünür satır sayısını hesapla ────────────────────────────────────
+  const maxScreenRows = Math.floor((height - headerH) / ROW_HEIGHT);
+  const maxRows = Math.min(maxScreenRows, MAX_VISIBLE);
 
+  // ── Trade satırları — filtre varsa iteratif tarama, yoksa doğrudan ───
   ctx.font = FONT;
+  let drawn = 0;
 
-  for (let i = 0; i < maxRows; i++) {
-    const trade = trades[i] as UnifiedTrade;
-    const y     = headerH + i * ROW_HEIGHT;
+  for (let idx = 0; idx < allTrades.length && drawn < maxRows; idx++) {
+    const trade = allTrades[idx] as UnifiedTrade;
+
+    // Minimum USD filtresi — eşik altındakileri atla
+    if (minUSD > 0 && trade.quoteQty < minUSD) continue;
+
+    const y = headerH + drawn * ROW_HEIGHT;
 
     // ── Balina highlight ────────────────────────────────────────────────
     if (trade.quoteQty >= WHALE_THRESHOLD) {
@@ -157,14 +161,21 @@ function drawTape(
     // USD hacim
     ctx.fillStyle = trade.quoteQty >= WHALE_THRESHOLD ? '#ffdd33' : rowColor;
     ctx.fillText(fmtUSD(trade.quoteQty), colUSD, y + ROW_HEIGHT - 4);
+
+    drawn++;
   }
 
   // Boş durum mesajı
-  if (trades.length === 0) {
+  if (allTrades.length === 0) {
     ctx.font      = '12px Arial';
     ctx.fillStyle = '#444';
     ctx.textAlign = 'center';
     ctx.fillText('Waiting for trades...', width / 2, height / 2);
+  } else if (drawn === 0 && minUSD > 0) {
+    ctx.font      = '12px Arial';
+    ctx.fillStyle = '#444';
+    ctx.textAlign = 'center';
+    ctx.fillText(`No trades ≥ $${minUSD.toLocaleString()}`, width / 2, height / 2);
   }
 
   ctx.restore();
@@ -172,11 +183,21 @@ function drawTape(
 
 // ── React Bileşeni ──────────────────────────────────────────────────────────
 
-export default function TapeCanvas(): JSX.Element {
+interface TapeCanvasProps {
+  minUSD?: number;
+}
+
+export default function TapeCanvas({ minUSD = 0 }: TapeCanvasProps): JSX.Element {
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const sizeRef      = useRef({ w: 0, h: 0 });
   const rafRef       = useRef<number>(0);
+  const minUSDRef    = useRef<number>(minUSD);
+
+  // minUSD prop değiştiğinde ref'i güncelle — RAF döngüsü bunu okur
+  useEffect(() => {
+    minUSDRef.current = minUSD;
+  }, [minUSD]);
 
   useEffect(() => {
     const canvas    = canvasRef.current;
@@ -214,7 +235,7 @@ export default function TapeCanvas(): JSX.Element {
       const { w, h } = sizeRef.current;
       const dpr = window.devicePixelRatio || 1;
       if (w > 0 && h > 0) {
-        drawTape(ctx!, w, h, dpr);
+        drawTape(ctx!, w, h, dpr, minUSDRef.current);
       }
       rafRef.current = requestAnimationFrame(loop);
     }
@@ -240,6 +261,73 @@ export default function TapeCanvas(): JSX.Element {
       }}
     >
       <canvas ref={canvasRef} style={{ display: 'block' }} />
+    </div>
+  );
+}
+
+// ── Trade Filtre Bileşeni (dışarıya export) ─────────────────────────────────
+
+export function TapeFilterInput({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+}): JSX.Element {
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 4,
+      padding: '0 6px',
+    }}>
+      <span style={{
+        fontSize: 9,
+        color: '#555',
+        fontWeight: 600,
+        whiteSpace: 'nowrap',
+      }}>MIN $</span>
+      <input
+        type="text"
+        inputMode="numeric"
+        placeholder="0"
+        value={value > 0 ? value.toString() : ''}
+        onChange={(e) => {
+          const raw = e.target.value.replace(/[^0-9]/g, '');
+          onChange(raw ? parseInt(raw, 10) : 0);
+        }}
+        style={{
+          width: 54,
+          height: 16,
+          background: '#111',
+          border: '1px solid #333',
+          borderRadius: 3,
+          color: value > 0 ? '#ffcc00' : '#666',
+          fontSize: 9,
+          fontFamily: '"Courier New", monospace',
+          fontWeight: 600,
+          padding: '0 4px',
+          outline: 'none',
+          textAlign: 'right',
+        }}
+      />
+      {value > 0 && (
+        <button
+          onClick={() => onChange(0)}
+          title="Filtreyi temizle"
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: '#666',
+            fontSize: 10,
+            cursor: 'pointer',
+            padding: '0 2px',
+            lineHeight: '14px',
+          }}
+        >
+          ✕
+        </button>
+      )}
     </div>
   );
 }

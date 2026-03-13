@@ -123,7 +123,7 @@ export interface MarketState {
 const _backendUrl      = import.meta.env.VITE_BACKEND_URL || 'http://localhost:9000';
 const WS_URL           = _backendUrl.replace(/^http/, 'ws');
 const REST_BASE        = _backendUrl;
-const MAX_TRADES       = 200;
+const MAX_TRADES       = 50_000;    // Tape'de trade'leri uzun süre tut — sayfa yenilenene kadar kaybolmasın
 const MAX_LIQUIDATIONS = 50;
 const RECONNECT_BASE   = 500;
 const RECONNECT_MAX    = 8000;
@@ -225,9 +225,20 @@ function handleTrades(data: unknown): void {
   const batch = data as TradeWithCVD;
   const prev = marketStore.getState().trades;
 
-  const merged = batch.trades.length + prev.length > MAX_TRADES
-    ? [...batch.trades, ...prev].slice(0, MAX_TRADES)
-    : [...batch.trades, ...prev];
+  // GC-dostu birleştirme: büyük buffer'ı her seferinde kopyalamaktan kaçın
+  let merged: UnifiedTrade[];
+  const totalLen = batch.trades.length + prev.length;
+  if (totalLen > MAX_TRADES) {
+    // Sadece taşma olduğunda yeni dizi oluştur ve kes
+    merged = new Array(MAX_TRADES);
+    const bLen = batch.trades.length;
+    for (let i = 0; i < bLen && i < MAX_TRADES; i++) merged[i] = batch.trades[i]!;
+    const remain = MAX_TRADES - bLen;
+    for (let i = 0; i < remain; i++) merged[bLen + i] = prev[i]!;
+  } else {
+    // Küçük batch — spread hâlâ verimli
+    merged = [...batch.trades, ...prev];
+  }
 
   const tradeUpdates: Partial<MarketState> = {
     trades: merged,
