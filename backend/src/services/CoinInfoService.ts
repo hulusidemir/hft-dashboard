@@ -58,6 +58,15 @@ const cache = new Map<string, CacheEntry>();
 // ── CoinGecko ID mapping cache ──────────────────────────────────────────────
 let coinListCache: { id: string; symbol: string; name: string }[] = [];
 let coinListFetchedAt = 0;
+const SEARCH_CACHE_TTL_MS = 30 * 60 * 1000; // 30 dakika
+const searchCache = new Map<string, { fetchedAt: number; data: CoinGeckoSearchCoin[] }>();
+
+interface CoinGeckoSearchCoin {
+  id: string;
+  symbol: string;
+  name: string;
+  market_cap_rank: number | null;
+}
 
 async function getCoinList(): Promise<{ id: string; symbol: string; name: string }[]> {
   if (coinListCache.length > 0 && Date.now() - coinListFetchedAt < 60 * 60 * 1000) {
@@ -75,6 +84,31 @@ async function getCoinList(): Promise<{ id: string; symbol: string; name: string
   } catch (err) {
     log.error('Failed to fetch coin list', err instanceof Error ? err : new Error(String(err)));
     return coinListCache; // stale data better than nothing
+  }
+}
+
+async function searchCoins(query: string): Promise<CoinGeckoSearchCoin[]> {
+  const key = query.toLowerCase();
+  const cached = searchCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < SEARCH_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  try {
+    const { data } = await axios.get<{ coins?: CoinGeckoSearchCoin[] }>(
+      `${COINGECKO_BASE}/search`,
+      {
+        params: { query },
+        timeout: 10000,
+      },
+    );
+
+    const coins = Array.isArray(data?.coins) ? data.coins : [];
+    searchCache.set(key, { fetchedAt: Date.now(), data: coins });
+    return coins;
+  } catch (err) {
+    log.warn(`CoinGecko search failed for query=${query}`);
+    return [];
   }
 }
 
@@ -174,12 +208,32 @@ async function resolveGeckoId(symbol: string): Promise<string | null> {
   if (candidates.length === 0) return null;
   if (candidates.length === 1) return candidates[0]!.id;
 
-  // Multiple matches — prefer the one whose ID contains the base name
-  const nameMatch = candidates.find((c) => c.id.includes(base));
-  if (nameMatch) return nameMatch.id;
+  // Exact ID match (e.g. symbol=bitcoin style edge cases)
+  const exactId = candidates.find((c) => c.id === base);
+  if (exactId) return exactId.id;
 
-  // Fallback: first result
-  return candidates[0]!.id;
+  // Multiple matches — use CoinGecko search ranking and keep only exact-symbol hits.
+  const searchResults = await searchCoins(base);
+  const candidateIds = new Set(candidates.map((c) => c.id));
+
+  const ranked = searchResults
+    .filter((coin) => coin.symbol?.toLowerCase() === base && candidateIds.has(coin.id))
+    .sort((a, b) => {
+      const rankA = a.market_cap_rank ?? Number.POSITIVE_INFINITY;
+      const rankB = b.market_cap_rank ?? Number.POSITIVE_INFINITY;
+      return rankA - rankB;
+    });
+
+  if (ranked.length > 0) {
+    return ranked[0]!.id;
+  }
+
+  // Last-resort fallback: deterministic first item in lexical order.
+  // This avoids non-deterministic API ordering differences between fetches.
+  const fallback = [...candidates].sort((a, b) => a.id.localeCompare(b.id))[0];
+  if (fallback) return fallback.id;
+
+  return null;
 }
 
 // ── API ─────────────────────────────────────────────────────────────────────
