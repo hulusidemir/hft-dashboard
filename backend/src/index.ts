@@ -1,23 +1,16 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // index.ts — Scalping Dashboard Backend — Full Entry Point
-// 3 Exchange Service + 4 Aggregator + uWebSockets.js Server + Graceful Shutdown
-// Dinamik sembol değişikliği: WS mesajı → disconnect → reset → reconnect
+// SubscriptionManager ile per-client sembol aboneliği + uWebSockets.js Server
+// Her client kendi sembolünü bağımsız olarak değiştirir, diğer client'lar etkilenmez.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Logger } from './utils/logger.js';
 import {
   DEFAULT_SYMBOL,
   fetchBybitLinearSymbols,
-  fetchAndRegisterSymbol,
 } from './config/symbols.js';
-import { BinanceService } from './services/BinanceService.js';
-import { BybitService } from './services/BybitService.js';
-import { OkxService } from './services/OkxService.js';
-import { OrderBookAggregator } from './aggregators/OrderBookAggregator.js';
-import { TradeAggregator } from './aggregators/TradeAggregator.js';
-import { LiquidationAggregator } from './aggregators/LiquidationAggregator.js';
-import { OpenInterestAggregator } from './aggregators/OpenInterestAggregator.js';
 import { startServer } from './server.js';
+import { SubscriptionManager } from './SubscriptionManager.js';
 import { RadarService } from './services/RadarService.js';
 import { initLiquidationDB, closeLiquidationDB } from './db/LiquidationDB.js';
 import { startLiquidationListener, stopLiquidationListener, liqEvents } from './services/LiquidationListener.js';
@@ -32,7 +25,6 @@ const WS_PORT = Number(process.env['WS_PORT']) || 9000;
 const log = new Logger('Main');
 
 // ── Global State ─────────────────────────────────────────────────────────────
-let currentSymbol: string = DEFAULT_SYMBOL;
 let bybitSymbolList: string[] = [];
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
@@ -54,137 +46,38 @@ async function main(): Promise<void> {
   }
 
   // ── 0b. Varsayılan sembolü kaydet (tickSize/stepSize fetch) ───────────────
-  await fetchAndRegisterSymbol(DEFAULT_SYMBOL);
+  // fetchAndRegisterSymbol, SubscriptionManager.preloadSymbol içinde çağrılır
 
   // ── 0c. SQLite Tasfiye Veritabanı + Otonom Dinleyici ───────────────────
   initLiquidationDB();
   startLiquidationListener();
 
-  // ── 1. Exchange Services ──────────────────────────────────────────────────
-  const binance = new BinanceService();
-  const bybit   = new BybitService();
-  const okx     = new OkxService();
+  // ── 1. SubscriptionManager + Radar Service ─────────────────────────
+  const subMgr = new SubscriptionManager();
 
-  // ── 2. Aggregators (DI) ───────────────────────────────────────────────────
-  const obAgg  = new OrderBookAggregator(binance, bybit, okx);
-  const trAgg  = new TradeAggregator(binance, bybit, okx);
-  const liqAgg = new LiquidationAggregator(binance, bybit, okx);
-  const oiAgg  = new OpenInterestAggregator(binance, bybit, okx);
-
-  // ── 2b. Radar Service (Global Screener) ─────────────────────────────
+  // ── 1b. Radar Service (Global Screener) ───────────────────────────
   const radar = new RadarService();
   radar.start();
 
   log.info('Tüm modüller instantiate edildi', {
-    services: [binance.exchange, bybit.exchange, okx.exchange],
+    services: ['Binance', 'Bybit', 'OKX'],
     aggregators: ['OrderBook', 'Trade', 'Liquidation', 'OpenInterest'],
+    mode: 'per-client subscriptions',
   });
 
-  // ── switchSymbol — Sembol Değişikliği Orkestratörü ────────────────────────
-  async function switchSymbol(newSymbol: string): Promise<void> {
-    log.info(`━━━ Sembol değişikliği: ${currentSymbol} → ${newSymbol} ━━━`);
-    const t0 = Date.now();
-    const previousSymbol = currentSymbol;
-
-    // 1) Aggregator'ları durdur ve sıfırla
-    log.info('[1/5] Aggregator\'lar durduruluyor ve sıfırlanıyor...');
-    obAgg.reset();
-    trAgg.reset();
-    liqAgg.reset();
-    oiAgg.reset();
-
-    // 2) Borsa bağlantılarını kes
-    log.info('[2/5] Borsa bağlantıları kesiliyor...');
-    binance.disconnect();
-    bybit.disconnect();
-    okx.disconnect();
-
-    try {
-      // 3) Yeni sembolün config'ini fetch et (tickSize/stepSize/contractSize)
-      log.info(`[3/5] Sembol config çekiliyor: ${newSymbol}`);
-      await fetchAndRegisterSymbol(newSymbol);
-
-      // 4) 3 Borsaya yeni sembolle bağlan
-      log.info(`[4/5] Borsalara yeniden bağlanılıyor: ${newSymbol}`);
-      const connectResults = await Promise.allSettled([
-        binance.connect(newSymbol),
-        bybit.connect(newSymbol),
-        okx.connect(newSymbol),
-      ]);
-
-      // Hangi borsalar bağlandı, hangileri başarısız?
-      const labels = ['Binance', 'Bybit', 'OKX'] as const;
-      for (let i = 0; i < connectResults.length; i++) {
-        const r = connectResults[i]!;
-        if (r.status === 'rejected') {
-          log.warn(`${labels[i]} bağlantı başarısız (${newSymbol}) — devam ediliyor`, {
-            error: r.reason instanceof Error ? r.reason.message : String(r.reason),
-          });
-        }
-      }
-
-      // 5) Aggregator'ları yeni sembolle başlat
-      log.info(`[5/5] Aggregator'lar başlatılıyor: ${newSymbol}`);
-      obAgg.start(newSymbol);
-      trAgg.start(newSymbol);
-      liqAgg.start(newSymbol);
-      oiAgg.start(newSymbol);
-
-      currentSymbol = newSymbol;
-      const elapsed = Date.now() - t0;
-      log.info(`━━━ Sembol değişikliği tamamlandı: ${newSymbol} (${elapsed}ms) ━━━`);
-    } catch (err) {
-      // ── Hata Kurtarma — eski sembole geri dön ────────────────────────
-      log.error(`Sembol değişikliği başarısız (${newSymbol}), ${previousSymbol}'e geri dönülüyor...`,
-        err instanceof Error ? err : new Error(String(err)));
-
-      try {
-        await fetchAndRegisterSymbol(previousSymbol);
-        await Promise.allSettled([
-          binance.connect(previousSymbol),
-          bybit.connect(previousSymbol),
-          okx.connect(previousSymbol),
-        ]);
-        obAgg.start(previousSymbol);
-        trAgg.start(previousSymbol);
-        liqAgg.start(previousSymbol);
-        oiAgg.start(previousSymbol);
-        log.info(`Eski sembole geri dönüldü: ${previousSymbol}`);
-      } catch (recoveryErr) {
-        log.fatal('Kurtarma da başarısız — sistem veri akışı olmadan devam ediyor',
-          recoveryErr instanceof Error ? recoveryErr : new Error(String(recoveryErr)));
-      }
-
-      // Orijinal hatayı yeniden fırlat — server.ts catch'e düşsün
-      throw err;
-    }
-  }
-
-  // ── 3. uWebSockets.js Server ─────────────────────────────────────────────
+  // ── 2. uWebSockets.js Server ───────────────────────────────────────────────
   const serverHandle = await startServer({
-    aggregators: {
-      orderBook:    obAgg,
-      trade:        trAgg,
-      liquidation:  liqAgg,
-      openInterest: oiAgg,
-    },
+    subscriptionManager: subMgr,
     services: { radar },
     port: WS_PORT,
-    onSymbolChange: switchSymbol,
     getSymbolList: () => bybitSymbolList,
-    getCurrentSymbol: () => currentSymbol,
+    defaultSymbol: DEFAULT_SYMBOL,
   });
 
-  // ── 4. Connect to Exchanges (parallel) ───────────────────────────────────
-  log.info(`Borsalara bağlanılıyor... symbol=${DEFAULT_SYMBOL}`);
-
-  await Promise.allSettled([
-    binance.connect(DEFAULT_SYMBOL),
-    bybit.connect(DEFAULT_SYMBOL),
-    okx.connect(DEFAULT_SYMBOL),
-  ]);
-
-  log.info('Borsa bağlantı denemeleri tamamlandı');
+  // ── 3. Varsayılan sembol stack'ini önceden oluştur ────────────────────────
+  log.info(`Varsayılan sembol stack'i oluşturuluyor: ${DEFAULT_SYMBOL}`);
+  await subMgr.preloadSymbol(DEFAULT_SYMBOL);
+  log.info('Varsayılan sembol stack\'i hazır');
 
   // ── 4b. Global War Log Event Wiring ───────────────────────────────────────────────
   // LiquidationListener (global tasfiye) + GlobalTradeListener (global whale) → war_log
@@ -192,11 +85,11 @@ async function main(): Promise<void> {
   globalTradeEvents.on('war_whale', (entry) => serverHandle.publishWarLog(entry));
 
   // ── 4b2. LiquidationListener → Liquidation Feed ──────────────────────────────────
-  // Global stream'lerden (Binance !forceOrder@arr + OKX liquidation-orders) gelen
-  // tüm tasfiyeler burada yakalanır. Aktif sembolle eşleşenler frontend'e iletilir.
+  // Global stream'lerden gelen tasfiyeler — aktif stack'i olan sembollere iletilir
   const EXCHANGE_MAP: Record<string, Exchange> = { binance: Exchange.BINANCE, bybit: Exchange.BYBIT, okx: Exchange.OKX };
   liqEvents.on('liq_all', (rec: LiquidationRecord) => {
-    if (rec.symbol !== currentSymbol) return;
+    // Sadece aktif stack'i olan sembollerin tasfiyelerini ilet
+    if (!subMgr.hasStack(rec.symbol)) return;
 
     const exEnum = EXCHANGE_MAP[rec.exchange] ?? Exchange.BINANCE;
     const unified: IUnifiedLiquidation = {
@@ -209,19 +102,14 @@ async function main(): Promise<void> {
       quoteQty: rec.usdValue,
       timestamp: rec.timestamp,
     };
-    serverHandle.publishLiquidation(unified);
+    serverHandle.publishLiquidationToSymbol(unified, rec.symbol);
   });
 
   // ── 4c. Global Trade Listener — Top 50 coin whale trade dedektörü ──────────
   startGlobalTradeListener(bybitSymbolList);
 
-  // ── 5. Start Aggregators ──────────────────────────────────────────────────
-  obAgg.start(DEFAULT_SYMBOL);
-  trAgg.start(DEFAULT_SYMBOL);
-  liqAgg.start(DEFAULT_SYMBOL);
-  oiAgg.start(DEFAULT_SYMBOL);
-
-  log.info('Aggregator\'lar aktif', { symbol: DEFAULT_SYMBOL });
+  // ── 5. Aggregator'lar SubscriptionManager tarafından yönetiliyor ──────────
+  log.info('Aggregator\'lar per-client subscription ile aktif', { defaultSymbol: DEFAULT_SYMBOL });
 
   // ── 6. Graceful Shutdown ──────────────────────────────────────────────────
   let isShuttingDown = false;
@@ -232,24 +120,18 @@ async function main(): Promise<void> {
 
     log.info(`${signal} alındı — graceful shutdown başlatılıyor...`);
 
-    // 6a. Aggregator'ları durdur
-    obAgg.reset();
-    trAgg.reset();
-    liqAgg.reset();
-    oiAgg.reset();
+    // 6a. SubscriptionManager — tüm stack'leri yık
+    subMgr.shutdown();
     radar.stop();
     stopLiquidationListener();
     stopGlobalTradeListener();
-    log.info('Aggregator\'lar, Radar, Liq Listener ve Global Trade Listener durduruldu');
+    log.info('SubscriptionManager, Radar, Liq Listener ve Global Trade Listener durduruldu');
 
     // 6b. uWS sunucusunu kapat
     serverHandle.close();
 
-    // 6c. Borsa bağlantılarını kes
-    binance.disconnect();
-    bybit.disconnect();
-    okx.disconnect();
-    log.info('Borsa bağlantıları kesildi');
+    // 6c. SubscriptionManager zaten exchange bağlantılarını kapattı
+    log.info('Borsa bağlantıları kesildi (SubscriptionManager tarafından)');
 
     closeLiquidationDB();
     log.info('LiquidationDB kapatıldı');
@@ -271,10 +153,9 @@ async function main(): Promise<void> {
   });
 
   log.info('━━━ Scalping Dashboard Backend tam operasyonel ━━━', {
-    symbol: currentSymbol,
+    defaultSymbol: DEFAULT_SYMBOL,
     port: WS_PORT,
-    exchanges: 3,
-    aggregators: 4,
+    mode: 'per-client subscriptions',
     availableSymbols: bybitSymbolList.length,
   });
 }

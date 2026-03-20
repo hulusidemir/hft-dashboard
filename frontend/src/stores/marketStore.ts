@@ -206,11 +206,18 @@ export function resetStore(): void {
   console.log('[marketStore] Store sıfırlandı');
 }
 
+function getExpectedSymbol(): string {
+  return marketStore.getState().currentSymbol;
+}
+
 // ── Message Handlers ────────────────────────────────────────────────────────
 
 function handleOrderBook(data: unknown): void {
+  const orderbook = data as UnifiedOrderBook;
+  if (orderbook.symbol !== getExpectedSymbol()) return;
+
   const updates: Partial<MarketState> = {
-    orderbook: data as UnifiedOrderBook,
+    orderbook,
     lastMessageAt: Date.now(),
   };
   // Sembol değişikliği warmup tamamlandı — ilk gerçek veri geldi
@@ -223,21 +230,25 @@ function handleOrderBook(data: unknown): void {
 
 function handleTrades(data: unknown): void {
   const batch = data as TradeWithCVD;
+  const expectedSymbol = getExpectedSymbol();
+  const filteredTrades = batch.trades.filter((trade) => trade.symbol === expectedSymbol);
+  if (filteredTrades.length === 0) return;
+
   const prev = marketStore.getState().trades;
 
   // GC-dostu birleştirme: büyük buffer'ı her seferinde kopyalamaktan kaçın
   let merged: UnifiedTrade[];
-  const totalLen = batch.trades.length + prev.length;
+  const totalLen = filteredTrades.length + prev.length;
   if (totalLen > MAX_TRADES) {
     // Sadece taşma olduğunda yeni dizi oluştur ve kes
     merged = new Array(MAX_TRADES);
-    const bLen = batch.trades.length;
-    for (let i = 0; i < bLen && i < MAX_TRADES; i++) merged[i] = batch.trades[i]!;
+    const bLen = filteredTrades.length;
+    for (let i = 0; i < bLen && i < MAX_TRADES; i++) merged[i] = filteredTrades[i]!;
     const remain = MAX_TRADES - bLen;
     for (let i = 0; i < remain; i++) merged[bLen + i] = prev[i]!;
   } else {
     // Küçük batch — spread hâlâ verimli
-    merged = [...batch.trades, ...prev];
+    merged = [...filteredTrades, ...prev];
   }
 
   const tradeUpdates: Partial<MarketState> = {
@@ -254,7 +265,7 @@ function handleTrades(data: unknown): void {
 
   // ── Whale Alarm — batch içinde $100K+ tekil işlem varsa ses tetikle ───
   if (marketStore.getState().isAlarmEnabled && audioManager.ready) {
-    for (const t of batch.trades) {
+    for (const t of filteredTrades) {
       if (t.quoteQty >= 100_000) {
         if (t.side === 'BUY') {
           audioManager.playWhaleBuy();
@@ -267,7 +278,7 @@ function handleTrades(data: unknown): void {
   }
 
   // ── War Log — Bybit/OKX balina ($100K+) — Binance whale'ler GlobalTradeListener'dan gelir
-  for (const t of batch.trades) {
+  for (const t of filteredTrades) {
     if (t.quoteQty >= 100_000 && t.exchange !== 'BINANCE') {
       pushWarLog({
         timestamp: t.timestamp,
@@ -283,6 +294,8 @@ function handleTrades(data: unknown): void {
 
 function handleLiquidation(data: unknown): void {
   const liq = data as UnifiedLiquidation;
+  if (liq.symbol !== getExpectedSymbol()) return;
+
   const prev = marketStore.getState().liquidations;
 
   const updated = prev.length >= MAX_LIQUIDATIONS
@@ -299,7 +312,10 @@ function handleLiquidation(data: unknown): void {
 }
 
 function handleOpenInterest(data: unknown): void {
-  marketStore.setState({ openInterest: data as UnifiedOpenInterest, lastMessageAt: Date.now() });
+  const openInterest = data as UnifiedOpenInterest;
+  if (openInterest.symbol !== getExpectedSymbol()) return;
+
+  marketStore.setState({ openInterest, lastMessageAt: Date.now() });
 }
 
 function handleInit(data: unknown): void {
@@ -317,7 +333,7 @@ function handleInit(data: unknown): void {
 
 function handleSymbolSwitching(data: unknown): void {
   const payload = data as { symbol: string };
-  marketStore.setState({ isChangingSymbol: true });
+  marketStore.setState({ currentSymbol: payload.symbol, isChangingSymbol: true });
   console.log(`[marketStore] Sembol değişiyor: ${payload.symbol}`);
   // Eski verileri hemen temizle — yeni sembol verisi gelene kadar ekran boş olsun
   resetStore();
